@@ -193,7 +193,7 @@ if uid == OWNER_ID:
         return True
     
     # Check blacklist
-    if uid in db['blacklist']:
+if uid in db['blacklist']:
         msg = "🚫 شما در لیست سیاه هستید و نمی‌توانید از ربات استفاده کنید."
         if update.message:
             await update.message.reply_text(msg)
