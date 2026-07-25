@@ -56,7 +56,7 @@ from telegram.ext import (
 # Configuration
 # -----------------------------
 
-BOT_TOKEN = "8935706635:AAETFqywo_ppreIjSQJ40F0vkAzeRm9cQ3M"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "1275490079"))
 BANK_BOT_USERNAME = os.getenv("BANK_BOT_USERNAME", "CamelotBank_bot").strip().lstrip("@").lower()
 TEHRAN = ZoneInfo("Asia/Tehran")
@@ -1326,5 +1326,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 '''
-Path('/mnt/data/bot.py').write_text(code, encoding='utf-8')
-print('written', Path('/mnt/data/bot.py').stat().st_size)
+exec(code, globals())
