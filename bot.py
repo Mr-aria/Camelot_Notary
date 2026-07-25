@@ -20,8 +20,8 @@ import string
 import logging
 import datetime
 import json
+import os
 import pytz
-from copy import deepcopy
 from typing import Dict, Any, Optional, List, Tuple
 
 from telegram import (
@@ -34,9 +34,9 @@ from telegram.ext import (
 )
 
 # ============ CONFIG ============
-BOT_TOKEN="***"
-OWNER_ID = 1275490079
-BANK_BOT_USERNAME = "CamelotBank_bot"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8935706635:***")
+OWNER_ID = int(os.environ.get("OWNER_ID", "1275490079"))
+BANK_BOT_USERNAME = os.environ.get("BANK_BOT_USERNAME", "CamelotBank_bot")
 TEHRAN_TZ = pytz.timezone('Asia/Tehran')
 
 logging.basicConfig(
@@ -186,14 +186,14 @@ def cancel_kb() -> InlineKeyboardMarkup:
 # ============ MIDDLEWARE / ACCESS CHECK ============
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Check if user has access (not blacklisted, bot is on, or is owner)."""
-uid = update.effective_user.id
+    uid = update.effective_user.id
     
     # Owner always has access
-if uid == OWNER_ID:
+    if uid == OWNER_ID:
         return True
     
     # Check blacklist
-if uid in db['blacklist']:
+    if uid in db['blacklist']:
         msg = "🚫 شما در لیست سیاه هستید و نمی‌توانید از ربات استفاده کنید."
         if update.message:
             await update.message.reply_text(msg)
@@ -287,7 +287,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     uid = update.effective_user.id
     if uid != OWNER_ID:
-        await update.message.reply_text("⛔️ شما دسترسی به پنل مدیریت ندارید.")
+        await update.message.reply_text("⛔ شما دسترسی به پنل مدیریت ندارید.")
         log_audit(uid, 'admin_access_denied', {})
         return
     
@@ -298,7 +298,7 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all callback queries."""
     if not await check_access(update, context):
-return
+        return
     
     query = update.callback_query
     uid = query.from_user.id
@@ -400,7 +400,7 @@ return
         target_uid = int(data.split("_")[-1])
         context.user_data['state'] = 'EDIT_USER_USERNAME'
         context.user_data['temp'] = {'target_uid': target_uid}
-await query.edit_message_text(
+        await query.edit_message_text(
             f"👤 یوزرنیم تلگرامی جدید (بدون @) برای کاربر {target_uid} را وارد کنید:",
             reply_markup=cancel_kb()
         )
@@ -408,7 +408,7 @@ await query.edit_message_text(
     elif data.startswith("blacklist_add_user_") and uid == OWNER_ID:
         target_uid = int(data.split("_")[-1])
         if target_uid == OWNER_ID:
-            await query.answer("⛔️ نمی‌توانید مالک را به لیست سیاه اضافه کنید!", show_alert=True)
+            await query.answer("⛔ نمی‌توانید مالک را به لیست سیاه اضافه کنید!", show_alert=True)
         else:
             db['blacklist'].add(target_uid)
             log_audit(uid, 'blacklist_add', {'target_user_id': target_uid})
@@ -496,7 +496,7 @@ async def show_vitrine(query, uid: int):
         )
     
     # Add edit/delete buttons for own products
-my_prods = [(code, p) for code, p in db['products'].items() if p['seller_id'] == uid and p['status'] == 'active']
+    my_prods = [(code, p) for code, p in db['products'].items() if p['seller_id'] == uid and p['status'] == 'active']
     if my_prods and uid != OWNER_ID:
         text += "\n📝 <b>محصولات شما (برای ویرایش/حذف روی کد بزنید):</b>\n"
     
@@ -543,7 +543,7 @@ async def show_product_edit_menu(query, code: str, uid: int):
     
     # Check ownership or admin
     if prod['seller_id'] != uid and uid != OWNER_ID:
-        await query.answer("⛔️ شما مجاز به ویرایش این محصول نیستید.", show_alert=True)
+        await query.answer("⛔ شما مجاز به ویرایش این محصول نیستید.", show_alert=True)
         return
     
     formatted_price = fmt_price(prod['price'])
@@ -568,7 +568,7 @@ async def confirm_delete_product(query, code: str, uid: int):
         return
     
     if prod['seller_id'] != uid and uid != OWNER_ID:
-        await query.answer("⛔️ شما مجاز به حذف این محصول نیستید.", show_alert=True)
+        await query.answer("⛔ شما مجاز به حذف این محصول نیستید.", show_alert=True)
         return
     
     kb = InlineKeyboardMarkup([
@@ -595,7 +595,7 @@ async def show_admin_users(query):
     """Show list of all registered users."""
     users = db['users']
     if not users:
-await query.edit_message_text("👥 هیچ کاربری ثبت‌نام نکرده است.", reply_markup=admin_menu_kb())
+        await query.edit_message_text("👥 هیچ کاربری ثبت‌نام نکرده است.", reply_markup=admin_menu_kb())
         return
     
     text = "<b>👥 لیست کاربران ثبت‌نام شده</b>\n\n"
@@ -619,7 +619,6 @@ await query.edit_message_text("👥 هیچ کاربری ثبت‌نام نکرد
     
     # Split if too long
     if len(text) > 4000:
-        # Send in chunks
         chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for i, chunk in enumerate(chunks):
             if i == len(chunks) - 1:
@@ -690,7 +689,7 @@ async def show_bot_stats(query):
     total_logs = len(db['audit_logs'])
     
     text = (
-f"<b>📊 آمار ربات کملوت</b>\n\n"
+        f"<b>📊 آمار ربات کملوت</b>\n\n"
         f"👥 کاربران کل: {total_users}\n"
         f"📦 کل محصولات: {total_products}\n"
         f"   ✅ فعال: {active_products}\n"
@@ -787,7 +786,7 @@ async def confirm_add_product(query, uid: int):
     """Confirm and create product."""
     temp = context.user_data.get('temp', {})
     if not temp.get('add_name') or 'add_price' not in temp or not temp.get('add_link'):
-await query.edit_message_text("❌ اطلاعات ناقص است. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_kb())
+        await query.edit_message_text("❌ اطلاعات ناقص است. لطفاً دوباره تلاش کنید.", reply_markup=main_menu_kb())
         return
     
     # Generate unique 8-char code
@@ -834,7 +833,7 @@ async def handle_edit_product(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     prod = db['products'][code]
     if prod['seller_id'] != uid and uid != OWNER_ID:
-        await update.message.reply_text("⛔️ شما مجاز به ویرایش این محصول نیستید.", reply_markup=main_menu_kb())
+        await update.message.reply_text("⛔ شما مجاز به ویرایش این محصول نیستید.", reply_markup=main_menu_kb())
         return
     
     if state == 'EDIT_PROD_NAME':
@@ -880,7 +879,7 @@ async def handle_buy_product(update: Update, context: ContextTypes.DEFAULT_TYPE,
         return
     
     if prod['seller_id'] == uid:
-        await update.message.reply_text("⛔️ شما نمی‌توانید محصول خودتان را بخرید!")
+        await update.message.reply_text("⛔ شما نمی‌توانید محصول خودتان را بخرید!")
         return
     
     # Store product for confirmation
@@ -888,7 +887,7 @@ async def handle_buy_product(update: Update, context: ContextTypes.DEFAULT_TYPE,
     context.user_data['state'] = 'BUY_CONFIRM'
     
     formatted_price = fmt_price(prod['price'])
-seller_name = get_user_display(prod['seller_id'])
+    seller_name = get_user_display(prod['seller_id'])
     
     msg = (
         f"🛒 <b>تایید خرید</b>\n\n"
@@ -992,7 +991,7 @@ async def handle_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'buyer_id': uid,
         'seller_id': prod['seller_id'],
         'txn_code': txn_code,
-'time': tehran_now(),
+        'time': tehran_now(),
         'price': prod['price']
     }
     db['purchases'].append(purchase_record)
@@ -1089,7 +1088,7 @@ async def handle_admin_manage_user(update: Update, context: ContextTypes.DEFAULT
         else:
             await update.message.reply_text("❌ کاربر یافت نشد.", reply_markup=admin_menu_kb())
         context.user_data['state'] = 'IDLE'
-context.user_data['temp'] = {}
+        context.user_data['temp'] = {}
     
     elif state == 'EDIT_USER_USERNAME':
         target_uid = temp.get('target_uid')
@@ -1116,7 +1115,7 @@ async def handle_blacklist_add(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     if target_uid == OWNER_ID:
-        await update.message.reply_text("⛔️ نمی‌توانید مالک را به لیست سیاه اضافه کنید!", reply_markup=admin_menu_kb())
+        await update.message.reply_text("⛔ نمی‌توانید مالک را به لیست سیاه اضافه کنید!", reply_markup=admin_menu_kb())
     else:
         db['blacklist'].add(target_uid)
         log_audit(uid, 'blacklist_add', {'target_user_id': target_uid})
@@ -1191,7 +1190,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid == OWNER_ID:
         await update.message.reply_text("👑 پنل مدیریت", reply_markup=admin_menu_kb())
     else:
-await update.message.reply_text("🏠 منوی اصلی", reply_markup=main_menu_kb())
+        await update.message.reply_text("🏠 منوی اصلی", reply_markup=main_menu_kb())
 
 # ============ ERROR HANDLER ============
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
