@@ -189,7 +189,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
 uid = update.effective_user.id
     
     # Owner always has access
-    if uid == OWNER_ID:
+if uid == OWNER_ID:
         return True
     
     # Check blacklist
