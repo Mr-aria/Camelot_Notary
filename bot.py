@@ -36,10 +36,10 @@ from telegram.ext import (
 # -----------------------------
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "توکن_ربات_را_اینجا_بگذارید_یا_در_متغیرهای_محیطی")
-OWNER_ID = int(os.getenv("OWNER_ID", "1275490079"))
-BANK_BOT_USERNAME = os.getenv("BANK_BOT_USERNAME", "CamelotBank_bot").strip().lstrip("@").lower()
+OWNER_ID = 1275490079
+BANK_BOT_USERNAME = "camelotbank_bot"
 TEHRAN = ZoneInfo("Asia/Tehran")
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+DB_PATH = "bot.db"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -269,11 +269,12 @@ def get_temp(context: ContextTypes.DEFAULT_TYPE) -> dict:
 def main_menu_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup([
         [BTN_BUY, BTN_ADD], 
-        [BTN_ASSETS, BTN_VITRINE]
+        [BTN_ASSETS, BTN_VITRINE],
+        [BTN_ADMIN]
     ], resize_keyboard=True)
 
 def cancel_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو", callback_data="cancel_action")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")]])
 
 def admin_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -282,7 +283,7 @@ def admin_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⛔ لیست سیاه", callback_data="admin_blacklist")],
         [InlineKeyboardButton("📄 ثبت لاگ ها", callback_data="admin_logs")],
         [InlineKeyboardButton("🔌 خاموش/روشن", callback_data="admin_toggle_bot")],
-        [InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back")],
+        [InlineKeyboardButton("❌ بستن پنل", callback_data="cancel_action")],
     ])
 
 def confirm_kb(yes_data: str, no_data: str = "cancel_action") -> InlineKeyboardMarkup:
@@ -330,9 +331,6 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     if uid is None:
         return False
     
-    if uid == OWNER_ID:
-        return True
-        
     if user_is_blacklisted(uid):
         msg = "شما مسدود شده اید"
         if update.message:
@@ -341,7 +339,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
             await update.callback_query.answer(msg, show_alert=True)
         return False
         
-    if not bot_is_on():
+    if not bot_is_on() and not is_owner(uid):
         msg = "ربات خاموشه"
         if update.message:
             await update.message.reply_text(msg)
@@ -357,7 +355,7 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return True
     set_state(context, S_REG_NAME)
     clear_temp(context)
-    await update.message.reply_text("نام کملوتی خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("نام کملوتی خود را وارد کنید:", reply_markup=cancel_kb())
     log_action(uid, "start_registration", "prompted name")
     return False
 
@@ -401,16 +399,23 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     if state == S_REG_NAME:
         temp["name"] = text
         set_state(context, S_REG_NID)
-        await update.message.reply_text("کدملی خود را وارد کنید:")
+        await update.message.reply_text("کدملی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=cancel_kb())
         return True
 
     if state == S_REG_NID:
+        if not (text.isdigit() and len(text) == 6):
+            await update.message.reply_text("خطا: کدملی باید دقیقاً ۶ رقم و فقط عدد باشد. دوباره وارد کنید:", reply_markup=cancel_kb())
+            return True
         temp["national_id"] = text
         set_state(context, S_REG_ACCOUNT)
-        await update.message.reply_text("شماره حساب بانکی خود را وارد کنید:")
+        await update.message.reply_text("شماره حساب بانکی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=cancel_kb())
         return True
 
     if state == S_REG_ACCOUNT:
+        if not (text.isdigit() and len(text) == 6):
+            await update.message.reply_text("خطا: شماره حساب باید دقیقاً ۶ رقم و فقط عدد باشد. دوباره وارد کنید:", reply_markup=cancel_kb())
+            return True
+            
         temp["bank_account"] = text
         now = now_tehran()
         db_exec(
@@ -434,7 +439,7 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
                 now,
             ),
         )
-        log_action(uid, "registered", f"name={temp.get('name','')}")
+        log_action(uid, "registered", f"name={temp.get('name','')}, nid={temp.get('national_id','')}, acc={temp.get('bank_account','')}")
         set_state(context, None)
         clear_temp(context)
         await update.message.reply_text("ثبت نام شما با موفقیت انجام شد.", reply_markup=main_menu_kb())
@@ -454,23 +459,23 @@ async def handle_add_product(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if state == S_ADD_NAME:
         temp["name"] = text
         set_state(context, S_ADD_PRICE)
-        await update.message.reply_text("مبلغ محصول را وارد کن:")
+        await update.message.reply_text("مبلغ محصول را وارد کن:", reply_markup=cancel_kb())
         return True
 
     if state == S_ADD_PRICE:
         if not text.isdigit():
-            await update.message.reply_text("لطفا مبلغ را به صورت عدد وارد کن:")
+            await update.message.reply_text("لطفا مبلغ را به صورت عدد وارد کن:", reply_markup=cancel_kb())
             return True
         temp["price"] = int(text)
         set_state(context, S_ADD_LINK)
-        await update.message.reply_text("لینک پست محصول را بفرست:")
+        await update.message.reply_text("لینک پست محصول را بفرست:", reply_markup=cancel_kb())
         return True
 
     if state == S_ADD_LINK:
         temp["link"] = text
         seller_name = get_user_display(uid)
         preview = (f"{seller_name}، آیا مطمئنی که میخوای محصول {temp.get('name')} رو با مبلغ {fmt_money(temp.get('price'))} رو با لینک پست {temp.get('link')} رو به ویترین فروشت اضافه کنی؟")
-        await update.message.reply_text(preview, reply_markup=confirm_kb("add_confirm_yes", "add_confirm_no"))
+        await update.message.reply_text(preview, reply_markup=confirm_kb("add_confirm_yes", "cancel_action"))
         return True
 
     return False
@@ -502,18 +507,22 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
                 is_bank_bot = True
 
     if not is_bank_bot:
-        await update.message.reply_text("فاکتور ارسالی باید مستقیماً از ربات بانک فوروارد شده باشد.")
+        log_action(uid, "receipt_failed_origin", "Forward was not from bank bot.")
+        await update.message.reply_text("فاکتور ارسالی باید مستقیماً از ربات بانک فوروارد شده باشد. مجدداً فوروارد کنید یا لغو کنید:", reply_markup=cancel_kb())
         return
 
     text_content = "\n".join(p for p in [message.text, message.caption] if p)
+    log_action(uid, "receipt_sent", f"text={text_content}")
     
     if tx_code not in text_content:
-        await update.message.reply_text("کد ۱۲ رقمی گفته شده، در فاکتور و رسید بانکی شما مشاهده نشد.")
+        log_action(uid, "receipt_failed_code", "12-char code not in receipt.")
+        await update.message.reply_text("کد ۱۲ رقمی گفته شده، در فاکتور و رسید بانکی شما مشاهده نشد. فاکتور معتبر ارسال کنید یا لغو کنید:", reply_markup=cancel_kb())
         return
 
     seller_account = (pending["seller_account"] or "").strip()
     if seller_account and seller_account not in text_content:
-        await update.message.reply_text("فاکتور نامعتبره.")
+        log_action(uid, "receipt_failed_account", "Seller account not in receipt.")
+        await update.message.reply_text("فاکتور نامعتبره. شماره حساب فروشنده در رسید یافت نشد.", reply_markup=cancel_kb())
         return
 
     product = db_one("SELECT * FROM products WHERE code = ?", (pending["product_code"],))
@@ -534,10 +543,10 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     )
     db_exec("DELETE FROM pending_buys WHERE buyer_id = ?", (uid,))
     
-    await update.message.reply_text("اوکیه و این محصول توسط شما خریداری شد.", reply_markup=main_menu_kb())
+    await update.message.reply_text("اوکیه و این محصول توسط شما خریداری شد و به لیست دارایی هایتان اضافه شد.", reply_markup=main_menu_kb())
     log_action(uid, "purchase_success", f"code={product['code']}")
 
-    # Notify Seller
+    # Notify Seller exactly as requested
     buyer_name = buyer["name"] if buyer else str(uid)
     buyer_acc = buyer["bank_account"] if buyer else "ثبت نشده"
     notify_text = (f"محصول {product['name']} شما با کد یکتای {product['code']}، توسط {buyer_name} و با شماره حساب {buyer_acc} و در تاریخ و ساعت {purchased_at}، خرید کرده است.\n\n"
@@ -565,9 +574,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data = query.data or ""
 
     if data == "cancel_action":
+        log_action(uid, "cancelled_action", f"State was {user_state(context)}")
         set_state(context, None)
         clear_temp(context)
-        await query.edit_message_text("عملیات لغو شد.")
+        await query.message.delete()
+        await context.bot.send_message(chat_id=uid, text="عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb())
         return
 
     if data == "add_confirm_yes":
@@ -577,13 +588,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "INSERT INTO products(code, seller_id, name, price, link, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
             (code, uid, temp["name"], int(temp["price"]), temp["link"], now_tehran(), now_tehran())
         )
+        log_action(uid, "product_added", f"code={code}")
         set_state(context, None)
         await query.edit_message_text(f"محصول با موفقیت اضافه شد.\n\nکد یکتا: {code}\nنام: {temp['name']}")
-        return
-
-    if data == "add_confirm_no":
-        set_state(context, None)
-        await query.edit_message_text("افزودن محصول لغو شد.")
+        await context.bot.send_message(chat_id=uid, text="به صفحه اصلی بازگشتید.", reply_markup=main_menu_kb())
         return
 
     if data == "buy_confirm_yes":
@@ -606,24 +614,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         temp["transaction_code"] = tx_code
         set_state(context, S_BUY_RECEIPT)
+        log_action(uid, "buy_initiated", f"code={product_code}, tx={tx_code}")
         
         msg = (f"برو به بانک (@CamelotBank_bot) و مبلغ {fmt_money(int(product['price']))} رو به شماره حساب {seller_account} بزن.\n\n"
-               f"حتما حتما موقع انتقال وجه به حساب فروشنده، حتما حتما این کد ۱۲ کاراکتری رو توی بخش توضیحات وارد کن و عملیات رو انجام بده در غیر اینصورت پولت گم میشه و میسوزه و چیزی گیرت نمیاد:\n\n"
+               f"حتما حتما موقع انتقال وجه به حساب فروشنده، حتما حتما این کد ۱۲ کاراکتری رو توی بخش توضیحات وارد کن و عملیات رو انجام بده وگرنه در غیر اینصورت پولت گم میشه و میسوزه و چیزی گیرت نمیاد:\n\n"
                f"`{tx_code}`\n\n"
                f"و وقتی که انتقال وجه دادی، فاکتور رو برام فروارد کن حتما به طوری که نمایش بده این پیام هدایت شده از کیه.")
                
-        await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN)
-        return
-
-    if data == "buy_confirm_no":
-        set_state(context, None)
-        await query.edit_message_text("خرید لغو شد.")
+        await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_kb())
         return
 
     # Delete Product
     if data.startswith("delete_product:"):
         code = data.split(":")[1]
         db_exec("DELETE FROM products WHERE code = ?", (code,))
+        log_action(uid, "product_deleted", f"code={code}")
         await query.edit_message_text("محصول با موفقیت حذف شد.")
         return
 
@@ -639,7 +644,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 [InlineKeyboardButton("نام", callback_data=f"edit_field:name:{code}")],
                 [InlineKeyboardButton("مبلغ", callback_data=f"edit_field:price:{code}")],
                 [InlineKeyboardButton("لینک", callback_data=f"edit_field:link:{code}")],
-                [InlineKeyboardButton("لغو", callback_data="cancel_action")]
+                [InlineKeyboardButton("❌ لغو", callback_data="cancel_action")]
             ])
         )
         return
@@ -650,7 +655,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         temp["edit_product_code"] = code
         temp["edit_field"] = field
         set_state(context, S_EDIT_PRODUCT_VALUE)
-        await query.edit_message_text("مقدار جدید را وارد کنید:")
+        await query.edit_message_text("مقدار جدید را وارد کنید:", reply_markup=cancel_kb())
         return
 
     # Admin callbacks
@@ -663,27 +668,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "admin_manage_user":
         set_state(context, S_ADMIN_GET_USER_ID)
-        await query.edit_message_text("آیدی عددی تلگرامی کاربر را وارد کن:")
+        await query.edit_message_text("آیدی عددی تلگرامی کاربر را وارد کن:", reply_markup=cancel_kb())
         return
 
     if data == "admin_blacklist":
         await query.edit_message_text(
             "لیست سیاه:",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("افزودن", callback_data="bl_add"), InlineKeyboardButton("حذف", callback_data="bl_rem")],
-                [InlineKeyboardButton("بازگشت", callback_data="admin_back")]
+                [InlineKeyboardButton("افزودن", callback_data="bl_add"), InlineKeyboardButton("خروج از لیست سیاه", callback_data="bl_rem")],
+                [InlineKeyboardButton("⬅️ بازگشت", callback_data="admin_back")]
             ])
         )
         return
         
     if data == "bl_add":
         set_state(context, S_ADMIN_BLACKLIST_ADD)
-        await query.edit_message_text("آیدی عددی را بفرست:")
+        await query.edit_message_text("آیدی عددی را بفرست:", reply_markup=cancel_kb())
         return
         
     if data == "bl_rem":
         set_state(context, S_ADMIN_BLACKLIST_REMOVE)
-        await query.edit_message_text("آیدی عددی برای خروج از لیست سیاه را بفرست:")
+        await query.edit_message_text("آیدی عددی برای خروج از لیست سیاه را بفرست:", reply_markup=cancel_kb())
         return
 
     if data == "admin_logs":
@@ -696,6 +701,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "admin_toggle_bot":
         new_status = "off" if bot_is_on() else "on"
         set_bot_status(new_status)
+        log_action(uid, "toggled_bot", f"status={new_status}")
         await query.edit_message_text(f"وضعیت ربات: {new_status}", reply_markup=admin_kb())
         return
 
@@ -708,19 +714,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         get_temp(context)["admin_target_user_id"] = int(data.split(":")[1])
         get_temp(context)["admin_target_field"] = "name"
         set_state(context, S_ADMIN_EDIT_USER_VALUE)
-        await query.edit_message_text("نام جدید کملوتی را وارد کن:")
+        await query.edit_message_text("نام جدید کملوتی را وارد کن:", reply_markup=cancel_kb())
         return
     if data.startswith("admin_user_account:"):
         get_temp(context)["admin_target_user_id"] = int(data.split(":")[1])
         get_temp(context)["admin_target_field"] = "bank_account"
         set_state(context, S_ADMIN_EDIT_USER_VALUE)
-        await query.edit_message_text("شماره حساب جدید را وارد کن:")
+        await query.edit_message_text("شماره حساب جدید را وارد کن:", reply_markup=cancel_kb())
         return
     if data.startswith("admin_user_username:"):
         get_temp(context)["admin_target_user_id"] = int(data.split(":")[1])
         get_temp(context)["admin_target_field"] = "username"
         set_state(context, S_ADMIN_EDIT_USER_VALUE)
-        await query.edit_message_text("یوزرنیم جدید را وارد کن:")
+        await query.edit_message_text("یوزرنیم جدید را وارد کن:", reply_markup=cancel_kb())
         return
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -731,6 +737,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     uid = update.effective_user.id
     text = normalize_text(update.message.text or update.message.caption)
+
+    if text in ["لغو", "بازگشت"]:
+        log_action(uid, "cancelled_action_text", f"State was {user_state(context)}")
+        set_state(context, None)
+        clear_temp(context)
+        await update.message.reply_text("عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb())
+        return
 
     # Auth Flow Check
     if not get_user(uid):
@@ -751,15 +764,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if state == S_BUY_CODE:
             product = db_one("SELECT * FROM products WHERE code = ?", (text,))
             if not product:
-                await update.message.reply_text("محصولی با این کد پیدا نشد.")
+                await update.message.reply_text("محصولی با این کد پیدا نشد.", reply_markup=cancel_kb())
                 return
             if product["status"] != "active":
-                await update.message.reply_text("این محصول قبلاً فروخته شده است.")
+                await update.message.reply_text("این محصول قبلاً فروخته شده است.", reply_markup=cancel_kb())
                 return
                 
             get_temp(context)["buy_product_code"] = product["code"]
             msg = f"محصول {product['name']} با قیمت {fmt_money(int(product['price']))} و لینک پست {product['link']} رو میخوای بخری؟"
-            await update.message.reply_text(msg, reply_markup=confirm_kb("buy_confirm_yes", "buy_confirm_no"))
+            await update.message.reply_text(msg, reply_markup=confirm_kb("buy_confirm_yes", "cancel_action"))
             return
             
         if state == S_BUY_RECEIPT:
@@ -771,18 +784,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             field = temp.get("edit_field")
             code = temp.get("edit_product_code")
             if field == "price":
+                if not text.isdigit():
+                    await update.message.reply_text("باید عدد وارد کنید:")
+                    return
                 db_exec(f"UPDATE products SET {field} = ? WHERE code = ?", (int(text), code))
             else:
                 db_exec(f"UPDATE products SET {field} = ? WHERE code = ?", (text, code))
+            log_action(uid, "product_edited", f"code={code}, field={field}, val={text}")
             set_state(context, None)
-            await update.message.reply_text("ویرایش انجام شد.")
+            await update.message.reply_text("ویرایش انجام شد.", reply_markup=main_menu_kb())
             return
 
         # Admin States
         if state == S_ADMIN_GET_USER_ID:
             row = get_user(int(text))
             if not row:
-                await update.message.reply_text("کاربر پیدا نشد.")
+                await update.message.reply_text("کاربر پیدا نشد.", reply_markup=cancel_kb())
                 return
             info = f"آیدی: {row['telegram_id']}\nنام: {row['name']}\nکدملی: {row['national_id']}\nحساب: {row['bank_account']}"
             await update.message.reply_text(info, reply_markup=admin_user_actions_kb(int(text)))
@@ -794,18 +811,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             target = temp["admin_target_user_id"]
             field = temp["admin_target_field"]
             db_exec(f"UPDATE users SET {field} = ? WHERE telegram_id = ?", (text, target))
+            log_action(uid, "admin_edit_user", f"target={target}, field={field}, val={text}")
             set_state(context, None)
             await update.message.reply_text("اطلاعات کاربر آپدیت شد.")
             return
             
         if state == S_ADMIN_BLACKLIST_ADD:
             db_exec("INSERT OR REPLACE INTO blacklist(telegram_id, reason, added_at) VALUES(?, ?, ?)", (int(text), "Manual Add", now_tehran()))
+            log_action(uid, "admin_blacklist_add", f"target={text}")
             set_state(context, None)
             await update.message.reply_text("به لیست سیاه افزوده شد.")
             return
             
         if state == S_ADMIN_BLACKLIST_REMOVE:
             db_exec("DELETE FROM blacklist WHERE telegram_id = ?", (int(text),))
+            log_action(uid, "admin_blacklist_remove", f"target={text}")
             set_state(context, None)
             await update.message.reply_text("از لیست سیاه حذف شد.")
             return
@@ -814,19 +834,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if text == BTN_ADD:
         set_state(context, S_ADD_NAME)
         clear_temp(context)
-        await update.message.reply_text("نام محصول را وارد کن:", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("نام محصول را وارد کن:", reply_markup=cancel_kb())
         return
         
     if text == BTN_BUY:
         set_state(context, S_BUY_CODE)
         clear_temp(context)
-        await update.message.reply_text("کدیکتای محصول رو وارد کنید:", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("کدیکتای محصول رو وارد کنید:", reply_markup=cancel_kb())
         return
         
     if text == BTN_VITRINE:
-        rows = db_all("SELECT * FROM products WHERE status = 'active' ORDER BY created_at DESC")
+        rows = db_all("SELECT * FROM products WHERE status = 'active' AND seller_id = ? ORDER BY created_at DESC", (uid,))
         if not rows:
-            await update.message.reply_text("ویترین خالی است.")
+            await update.message.reply_text("ویترین شما خالی است. فقط محصولاتی که شما اضافه کرده‌اید اینجا نمایش داده می‌شوند.")
             return
         for r in rows:
             seller = get_user(r["seller_id"])
