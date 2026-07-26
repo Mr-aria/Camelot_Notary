@@ -625,16 +625,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         set_state(context, S_BUY_RECEIPT)
         log_action(uid, "buy_initiated", f"code={product_code}, tx={tx_code}")
 
-        # Build the instruction message
+        # Build the instruction message using HTML for safe formatting
         msg = (
             f"✅ مرحله بعد:\n\n"
             f"۱. به ربات بانک (@{BANK_BOT_USERNAME}) بروید.\n"
             f"۲. مبلغ {fmt_money(int(product['price']))} تومان را به شماره حساب زیر واریز کنید:\n"
-            f"`{seller_account}`\n\n"
-            f"⚠️ **حتماً حتماً** در بخش توضیحات انتقال وجه، کد ۱۲ کاراکتری زیر را وارد کنید:\n"
-            f"`{tx_code}`\n\n"
+            f"<code>{seller_account}</code>\n\n"
+            f"⚠️ <b>حتماً حتماً</b> در بخش توضیحات انتقال وجه، کد ۱۲ کاراکتری زیر را وارد کنید:\n"
+            f"<code>{tx_code}</code>\n\n"
             f"اگر این کد را وارد نکنید، پول شما گم می‌شود و قابل پیگیری نخواهد بود.\n\n"
-            f"۳. پس از انجام انتقال، **فاکتور (رسید)** را از ربات بانک به **همین گفتگو** فوروارد کنید.\n"
+            f"۳. پس از انجام انتقال، <b>فاکتور (رسید)</b> را از ربات بانک به <b>همین گفتگو</b> فوروارد کنید.\n"
             f"توجه: فاکتور باید مستقیماً از ربات بانک فوروارد شده باشد تا معتبر باشد.\n\n"
             f"برای لغو عملیات، دکمه زیر را بزنید."
         )
@@ -644,7 +644,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await context.bot.send_message(
                 chat_id=uid,
                 text=msg,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=cancel_kb()
             )
             # Now delete the old message
