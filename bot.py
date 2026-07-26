@@ -428,7 +428,26 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return False
 
 # -----------------------------
-# Start / Cancel / Admin command
+# Cancel handler
+# -----------------------------
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """لغو عملیات جاری و بازگشت به منوی اصلی"""
+    uid = update.effective_user.id
+    user = get_user(uid)
+    set_state(context, None)
+    clear_temp(context)
+    if user:
+        await update.message.reply_text(
+            "❌ عملیات لغو شد. به منوی اصلی بازگشتید.",
+            reply_markup=main_menu_kb(uid)
+        )
+    else:
+        await update.message.reply_text("❌ عملیات لغو شد. برای شروع مجدد /start بزنید.")
+    return ConversationHandler.END
+
+# -----------------------------
+# Start / Admin command
 # -----------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -931,7 +950,7 @@ async def restore_account_confirm(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.pop('backup_json_data', None)
 
 async def restart_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """دستور ری‌استارت (فقط پیام)</!DOCTYPE html>"""
+    """دستور ری‌استارت (فقط پیام)"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -1374,7 +1393,7 @@ def main() -> None:
     app.add_handler(admin_backup_import_conv)
     app.add_handler(restore_account_conv)
     
-    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد")
+    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد.")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
