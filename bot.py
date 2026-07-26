@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Camelot Telegram Marketplace Bot - Customized Flow"""
+"""Camelot Telegram Marketplace Bot - Customized Flow with Backup/Restore"""
 
 from __future__ import annotations
 
 import logging
 import os
-import re
 import secrets
 import sqlite3
 import string
 import threading
+import json
+import io
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from telegram import (
     Update,
@@ -29,6 +30,7 @@ from telegram.ext import (
     ContextTypes,
     MessageHandler,
     filters,
+    ConversationHandler,
 )
 
 # -----------------------------
@@ -76,6 +78,12 @@ S_ADMIN_EDIT_USER_FIELD = "admin_edit_user_field"
 S_ADMIN_EDIT_USER_VALUE = "admin_edit_user_value"
 S_ADMIN_BLACKLIST_ADD = "admin_blacklist_add"
 S_ADMIN_BLACKLIST_REMOVE = "admin_blacklist_remove"
+
+# New states for backup/restore
+S_ADMIN_BACKUP_IMPORT_FILE = "admin_backup_import_file"
+S_ADMIN_BACKUP_CONFIRM = "admin_backup_confirm"
+S_RESTORE_ACCOUNT_FILE = "restore_account_file"
+S_RESTORE_ACCOUNT_CONFIRM = "restore_account_confirm"
 
 # -----------------------------
 # SQLite helpers
@@ -285,6 +293,7 @@ def admin_kb() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⛔ لیست سیاه", callback_data="admin_blacklist")],
         [InlineKeyboardButton("📄 ثبت لاگ ها", callback_data="admin_logs")],
         [InlineKeyboardButton("🔌 خاموش/روشن", callback_data="admin_toggle_bot")],
+        [InlineKeyboardButton("💾 پشتیبان‌گیری و بازیابی", callback_data="admin_backup")],
         [InlineKeyboardButton("❌ بستن پنل", callback_data="cancel_action")],
     ])
 
@@ -324,9 +333,61 @@ def safe_send_chunks(text: str, max_len: int = 3900) -> List[str]:
         text = text[cut:].lstrip("\n")
     return chunks
 
-# -----------------------------
-# Access control
-# -----------------------------
+# ==================== Backup & Restore Functions ====================
+
+def export_full_backup() -> str:
+    """Export all tables as JSON."""
+    tables = ['users', 'products', 'purchases', 'pending_buys', 'blacklist', 'settings', 'logs']
+    data = {}
+    with _db_lock:
+        for table in tables:
+            cursor = _db.execute(f"SELECT * FROM {table}")
+            rows = cursor.fetchall()
+            # Convert rows to list of dicts
+            data[table] = [dict(row) for row in rows]
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+def import_full_backup(json_data: str) -> tuple:
+    """
+    Restore database from JSON backup.
+    Returns (success: bool, message: str)
+    """
+    try:
+        data = json.loads(json_data)
+    except json.JSONDecodeError as e:
+        return False, f"فایل JSON معتبر نیست: {e}"
+    
+    # Validate structure
+    expected_tables = {'users', 'products', 'purchases', 'pending_buys', 'blacklist', 'settings', 'logs'}
+    if not expected_tables.issubset(data.keys()):
+        return False, "فایل پشتیبان کامل نیست. جداول مورد نیاز وجود ندارند."
+    
+    with _db_lock:
+        # Begin transaction
+        try:
+            # Clear existing data
+            for table in expected_tables:
+                _db.execute(f"DELETE FROM {table}")
+            
+            # Insert new data
+            for table, rows in data.items():
+                if not rows:
+                    continue
+                # Get column names from first row
+                columns = list(rows[0].keys())
+                placeholders = ','.join(['?' for _ in columns])
+                col_names = ','.join(columns)
+                for row in rows:
+                    values = [row.get(col) for col in columns]
+                    _db.execute(f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})", values)
+            
+            _db.commit()
+            return True, "بازیابی با موفقیت انجام شد."
+        except Exception as e:
+            _db.rollback()
+            return False, f"خطا در بازیابی: {str(e)}"
+
+# ==================== Access control ====================
 
 async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     uid = update.effective_user.id if update.effective_user else None
@@ -355,6 +416,21 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     uid = update.effective_user.id
     if get_user(uid):
         return True
+    # If owner, show restore option
+    if is_owner(uid):
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 بازیابی اطلاعات", callback_data="restore_account")],
+            [InlineKeyboardButton("📝 ثبت‌نام جدید", callback_data="register_new")]
+        ])
+        await update.message.reply_text(
+            "🏦 **به ثبت‌اسناد کملوت خوش آمدید!**\n\n"
+            "شما به عنوان مالک وارد شده‌اید.\n"
+            "• اگر قبلاً حساب داشته‌اید و اطلاعات آن را بازیابی کرده‌اید، روی «بازیابی اطلاعات» کلیک کنید.\n"
+            "• اگر می‌خواهید حساب جدید بسازید، روی «ثبت‌نام جدید» کلیک کنید.",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+        return False
     set_state(context, S_REG_NAME)
     clear_temp(context)
     await update.message.reply_text("نام کملوتی خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
@@ -532,7 +608,7 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     # Check amount
     expected_price = int(pending["price"])
     # Pattern to find amount: "مبلغ: 4 ART" or "💰 مبلغ: 4 ART"
-    # Also support comma as thousands separator, and possibly spaces
+    import re
     amount_pattern = r"مبلغ:\s*([\d,]+)\s*ART"
     match = re.search(amount_pattern, text_content)
     receipt_amount = None
@@ -585,6 +661,305 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
         
     set_state(context, None)
     clear_temp(context)
+
+# ==================== Backup/Restore Handlers ====================
+
+async def admin_backup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show backup/restore menu in admin panel."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 گرفتن پشتیبان", callback_data="admin_backup_export")],
+        [InlineKeyboardButton("📤 بازیابی از پشتیبان", callback_data="admin_backup_import")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]
+    ])
+    await query.edit_message_text(
+        "💾 **پشتیبان‌گیری و بازیابی**\n\n"
+        "• **گرفتن پشتیبان:** یک فایل JSON کامل از تمام اطلاعات بانک تهیه می‌شود.\n"
+        "• **بازیابی:** با ارسال فایل پشتیبان، اطلاعات قبلی بازگردانده می‌شود.\n\n"
+        "⚠️ **هشدار:** بازیابی تمام اطلاعات فعلی را بازنویسی می‌کند!",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+
+async def admin_backup_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Export backup and send as file."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return
+    
+    await query.edit_message_text("📥 در حال تهیه پشتیبان... لطفاً صبر کنید.", parse_mode='Markdown')
+    try:
+        json_data = export_full_backup()
+        file_obj = io.BytesIO(json_data.encode('utf-8'))
+        file_obj.name = f"camelot_market_backup_{datetime.now(TEHRAN).strftime('%Y%m%d_%H%M%S')}.json"
+        await context.bot.send_document(
+            chat_id=uid,
+            document=file_obj,
+            caption="💾 **پشتیبان ثبت‌اسناد کملوت**\n\n"
+                    f"🕐 تاریخ: {now_tehran()}\n"
+                    "📌 این فایل شامل تمام اطلاعات است.\n"
+                    "برای بازیابی، از بخش «بازیابی از پشتیبان» استفاده کنید.",
+            parse_mode='Markdown'
+        )
+        log_action(uid, "admin_backup_export", "Backup exported")
+        await query.edit_message_text(
+            "✅ **پشتیبان با موفقیت تهیه و ارسال شد.**\n\n"
+            "فایل JSON را در جای امن نگهداری کنید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="admin_back")]]),
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error exporting backup: {e}")
+        await query.edit_message_text(
+            f"❌ خطا در تهیه پشتیبان: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]])
+        )
+
+async def admin_backup_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start import process: ask for file."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return ConversationHandler.END
+    
+    await query.edit_message_text(
+        "📤 **بازیابی از پشتیبان**\n\n"
+        "⚠️ **هشدار مهم:**\n"
+        "• این عملیات **تمام اطلاعات فعلی** را بازنویسی می‌کند.\n"
+        "• قبل از ادامه، حتماً یک پشتیبان جدید بگیرید.\n"
+        "• فقط فایل‌های JSON معتبر که توسط ربات تولید شده‌اند قابل قبول هستند.\n\n"
+        "لطفاً فایل پشتیبان (JSON) را ارسال کنید.\n"
+        "(برای لغو /cancel بزنید)",
+        parse_mode='Markdown'
+    )
+    return S_ADMIN_BACKUP_IMPORT_FILE
+
+async def admin_backup_import_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive the file and ask for confirmation."""
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text("⛔ دسترسی ندارید.")
+        return ConversationHandler.END
+    
+    document = update.message.document
+    if not document:
+        await update.message.reply_text(
+            "❌ لطفاً یک فایل ارسال کنید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]])
+        )
+        return S_ADMIN_BACKUP_IMPORT_FILE
+    
+    if not document.file_name.endswith('.json'):
+        await update.message.reply_text(
+            "❌ فقط فایل‌های JSON معتبر هستند.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]])
+        )
+        return S_ADMIN_BACKUP_IMPORT_FILE
+    
+    await update.message.reply_text("📥 در حال دریافت فایل...", parse_mode='Markdown')
+    try:
+        file = await context.bot.get_file(document.file_id)
+        file_content = await file.download_as_bytearray()
+        json_data = file_content.decode('utf-8')
+        context.user_data['backup_json_data'] = json_data
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، بازیابی کن", callback_data="admin_backup_import_confirm")],
+            [InlineKeyboardButton("❌ لغو", callback_data="admin_back")]
+        ])
+        await update.message.reply_text(
+            "⚠️ **تأیید نهایی بازیابی**\n\n"
+            "آیا از بازنویسی کامل اطلاعات مطمئن هستید؟\n"
+            "این عملیات قابل بازگشت نیست!",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+        return S_ADMIN_BACKUP_CONFIRM
+    except Exception as e:
+        logger.error(f"Error receiving backup file: {e}")
+        await update.message.reply_text(
+            f"❌ خطا در دریافت فایل: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]])
+        )
+        context.user_data.pop('backup_json_data', None)
+        return ConversationHandler.END
+
+async def admin_backup_import_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Execute the import."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return
+    
+    json_data = context.user_data.get('backup_json_data')
+    if not json_data:
+        await query.edit_message_text("❌ خطا: داده‌های پشتیبان یافت نشد.")
+        return
+    
+    await query.edit_message_text("🔄 در حال بازیابی اطلاعات... لطفاً صبر کنید.", parse_mode='Markdown')
+    try:
+        success, message = import_full_backup(json_data)
+        if success:
+            log_action(uid, "admin_backup_import", "Restore successful")
+            await query.edit_message_text(
+                "✅ **بازیابی با موفقیت انجام شد!**\n\n"
+                "تمام اطلاعات به نسخه پشتیبان بازگردانده شد.\n"
+                "لطفاً ربات را ری‌استارت کنید تا تغییرات اعمال شوند.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="admin_back")]]),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ **خطا در بازیابی:**\n{message}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]])
+            )
+    except Exception as e:
+        logger.error(f"Error during restore: {e}")
+        await query.edit_message_text(
+            f"❌ خطا در بازیابی: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_back")]])
+        )
+    context.user_data.pop('backup_json_data', None)
+
+# ==================== Restore Account for Owner ====================
+
+async def restore_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start restore account flow (only for owner)."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return ConversationHandler.END
+    
+    await query.edit_message_text(
+        "📤 **بازیابی اطلاعات از فایل بکاپ**\n\n"
+        "⚠️ **هشدار مهم:**\n"
+        "• این عملیات **تمام اطلاعات فعلی** بانک را بازنویسی می‌کند.\n"
+        "• فقط فایل‌های JSON معتبر که توسط ربات تولید شده‌اند قابل قبول هستند.\n\n"
+        "لطفاً فایل بکاپ (JSON) را ارسال کنید.\n"
+        "(برای لغو /cancel بزنید)",
+        parse_mode='Markdown'
+    )
+    return S_RESTORE_ACCOUNT_FILE
+
+async def restore_account_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Receive file for restore account."""
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text("⛔ دسترسی ندارید.")
+        return ConversationHandler.END
+    
+    document = update.message.document
+    if not document:
+        await update.message.reply_text(
+            "❌ لطفاً یک فایل ارسال کنید.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_action")]])
+        )
+        return S_RESTORE_ACCOUNT_FILE
+    
+    if not document.file_name.endswith('.json'):
+        await update.message.reply_text(
+            "❌ فقط فایل‌های JSON معتبر هستند.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_action")]])
+        )
+        return S_RESTORE_ACCOUNT_FILE
+    
+    await update.message.reply_text("📥 در حال دریافت و بررسی فایل... لطفاً صبر کنید.", parse_mode='Markdown')
+    try:
+        file = await context.bot.get_file(document.file_id)
+        file_content = await file.download_as_bytearray()
+        json_data = file_content.decode('utf-8')
+        context.user_data['backup_json_data'] = json_data
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ بله، بازیابی کن", callback_data="restore_account_confirm")],
+            [InlineKeyboardButton("❌ لغو", callback_data="cancel_action")]
+        ])
+        await update.message.reply_text(
+            "⚠️ **تأیید نهایی بازیابی**\n\n"
+            "آیا از بازنویسی کامل اطلاعات مطمئن هستید؟\n"
+            "این عملیات قابل بازگشت نیست!",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+        return S_RESTORE_ACCOUNT_CONFIRM
+    except Exception as e:
+        logger.error(f"Error receiving restore file: {e}")
+        await update.message.reply_text(
+            f"❌ خطا در دریافت فایل: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_action")]])
+        )
+        context.user_data.pop('backup_json_data', None)
+        return ConversationHandler.END
+
+async def restore_account_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Execute restore for owner."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return
+    
+    json_data = context.user_data.get('backup_json_data')
+    if not json_data:
+        await query.edit_message_text("❌ خطا: داده‌های پشتیبان یافت نشد.")
+        return
+    
+    await query.edit_message_text("🔄 در حال بازیابی اطلاعات... لطفاً صبر کنید.", parse_mode='Markdown')
+    try:
+        success, message = import_full_backup(json_data)
+        if success:
+            log_action(uid, "restore_account", "Restore successful via start")
+            await query.edit_message_text(
+                "✅ **بازیابی با موفقیت انجام شد!**\n\n"
+                "تمام اطلاعات به نسخه پشتیبان بازگردانده شد.\n"
+                "لطفاً دوباره /start بزنید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 شروع مجدد", callback_data="restart_bot")]]),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ **خطا در بازیابی:**\n{message}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_action")]])
+            )
+    except Exception as e:
+        logger.error(f"Error during restore account: {e}")
+        await query.edit_message_text(
+            f"❌ خطا در بازیابی: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="cancel_action")]])
+        )
+    context.user_data.pop('backup_json_data', None)
+
+async def restart_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Restart bot placeholder."""
+    query = update.callback_query
+    await query.answer()
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await query.edit_message_text("⛔ دسترسی ندارید.")
+        return
+    await query.edit_message_text(
+        "🔄 **ربات در حال ری‌استارت است...**\n\n"
+        "لطفاً چند ثانیه صبر کنید و سپس دوباره /start بزنید.",
+        parse_mode='Markdown'
+    )
+    # In real scenario, you might trigger a restart mechanism.
+    # For now, just inform user.
 
 # -----------------------------
 # Handlers
@@ -650,7 +1025,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         set_state(context, S_BUY_RECEIPT)
         log_action(uid, "buy_initiated", f"code={product_code}, tx={tx_code}")
 
-        # Build the instruction message using HTML for safe formatting
         msg = (
             f"✅ مرحله بعد:\n\n"
             f"۱. به ربات بانک (@{BANK_BOT_USERNAME}) بروید.\n"
@@ -664,7 +1038,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"برای لغو عملیات، دکمه زیر را بزنید."
         )
 
-        # Send the new message first, then delete the old confirmation message
         try:
             await context.bot.send_message(
                 chat_id=uid,
@@ -672,11 +1045,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 parse_mode=ParseMode.HTML,
                 reply_markup=cancel_kb()
             )
-            # Now delete the old message
             await query.message.delete()
         except Exception as e:
             logger.error(f"Error sending purchase instruction: {e}")
-            # If sending failed, inform the user and keep the old message
             await query.edit_message_text(
                 "خطا در ارسال دستورالعمل خرید. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
                 reply_markup=confirm_kb("buy_confirm_yes", "cancel_action")
@@ -765,7 +1136,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "admin_back":
+        # Return to admin panel
         await query.edit_message_text("پنل مدیریت:", reply_markup=admin_kb())
+        return
+
+    # Admin Backup
+    if data == "admin_backup":
+        await admin_backup_menu(update, context)
+        return
+
+    if data == "admin_backup_export":
+        await admin_backup_export(update, context)
+        return
+
+    if data == "admin_backup_import":
+        # This is a callback, but we need to start conversation; we'll handle via separate handler
+        await admin_backup_import_start(update, context)
+        return
+
+    if data == "admin_backup_import_confirm":
+        await admin_backup_import_confirm(update, context)
+        return
+
+    # Restore account (from registration)
+    if data == "restore_account":
+        await restore_account_start(update, context)
+        return
+
+    if data == "restore_account_confirm":
+        await restore_account_confirm(update, context)
+        return
+
+    if data == "restart_bot":
+        await restart_bot_callback(update, context)
         return
 
     # Admin User Edit fields
@@ -788,6 +1191,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("یوزرنیم جدید را وارد کن:", reply_markup=cancel_kb())
         return
 
+    # Register new (from start)
+    if data == "register_new":
+        # Start registration flow
+        context.user_data.clear()
+        context.user_data['register_step'] = S_REG_NAME
+        context.user_data['username'] = update.effective_user.username or ""
+        await query.edit_message_text(
+            "📝 **ثبت‌نام جدید**\n\n"
+            "لطفاً نام کملوتی خود را وارد کنید:\n"
+            "(برای لغو /cancel بزنید)",
+            parse_mode='Markdown'
+        )
+        # We need to set state to registration; but since it's a callback, we'll handle in handle_message?
+        # Better to set state and reply with text; then next message will be handled by handle_message.
+        set_state(context, S_REG_NAME)
+        clear_temp(context)
+        return
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.effective_user:
         return
@@ -796,6 +1217,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     uid = update.effective_user.id
     text = normalize_text(update.message.text or update.message.caption)
+
+    # Check if we are in admin backup import file state (conversation)
+    state = user_state(context)
+    if state == S_ADMIN_BACKUP_IMPORT_FILE:
+        # This is handled by the conversation handler, but we also need to catch document messages
+        # Actually we'll rely on the conversation handler; but we can handle text messages for cancellation
+        if text in ["لغو", "بازگشت"]:
+            set_state(context, None)
+            clear_temp(context)
+            await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_kb(uid))
+            return
+        # Otherwise, user should send a file; we'll let the conversation handler catch it.
+        return
+
+    if state == S_RESTORE_ACCOUNT_FILE:
+        # Similar, handled by conversation handler
+        if text in ["لغو", "بازگشت"]:
+            set_state(context, None)
+            clear_temp(context)
+            await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_kb(uid))
+            return
+        return
 
     if text in ["لغو", "بازگشت"]:
         log_action(uid, "cancelled_action_text", f"State was {user_state(context)}")
@@ -809,8 +1252,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if await handle_registration(update, context, text):
             return
         return
-
-    state = user_state(context)
 
     # Handle Active States
     if state:
@@ -889,6 +1330,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("از لیست سیاه حذف شد.")
             return
 
+        # These states are handled by conversation handlers, but in case of text we ignore
+        if state in (S_ADMIN_BACKUP_IMPORT_FILE, S_RESTORE_ACCOUNT_FILE):
+            # Already handled above
+            return
+
     # Handle Main Menu Buttons
     if text == BTN_ADD:
         set_state(context, S_ADD_NAME)
@@ -930,12 +1376,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await update.message.reply_text("لطفاً یک گزینه انتخاب کنید:", reply_markup=main_menu_kb(uid))
 
+# ==================== Conversation Handlers ====================
+
+# Admin Backup Import Conversation
+admin_backup_import_conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(admin_backup_import_start, pattern="^admin_backup_import$")],
+    states={
+        S_ADMIN_BACKUP_IMPORT_FILE: [MessageHandler(filters.Document.ALL, admin_backup_import_file)],
+        S_ADMIN_BACKUP_CONFIRM: [CallbackQueryHandler(admin_backup_import_confirm, pattern="^admin_backup_import_confirm$")],
+    },
+    fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel)],
+)
+
+# Restore Account Conversation (for owner during registration)
+restore_account_conv = ConversationHandler(
+    entry_points=[CallbackQueryHandler(restore_account_start, pattern="^restore_account$")],
+    states={
+        S_RESTORE_ACCOUNT_FILE: [MessageHandler(filters.Document.ALL, restore_account_file)],
+        S_RESTORE_ACCOUNT_CONFIRM: [CallbackQueryHandler(restore_account_confirm, pattern="^restore_account_confirm$")],
+    },
+    fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel)],
+)
+
+# ==================== Main ====================
+
 def main() -> None:
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("cancel", cancel))
+    
+    # Callback handlers
     app.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # Message handler (for all non-command messages)
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+    
+    # Conversation handlers for backup/restore
+    app.add_handler(admin_backup_import_conv)
+    app.add_handler(restore_account_conv)
+    
     logger.info("Bot started.")
     app.run_polling(drop_pending_updates=True)
 
