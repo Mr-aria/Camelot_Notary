@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Camelot Telegram Marketplace Bot - Customized Flow with Backup/Restore"""
+"""Camelot Telegram Marketplace Bot - با قابلیت پشتیبان‌گیری و بازیابی"""
 
 from __future__ import annotations
 
@@ -343,7 +343,6 @@ def export_full_backup() -> str:
         for table in tables:
             cursor = _db.execute(f"SELECT * FROM {table}")
             rows = cursor.fetchall()
-            # Convert rows to list of dicts
             data[table] = [dict(row) for row in rows]
     return json.dumps(data, indent=2, ensure_ascii=False)
 
@@ -357,30 +356,24 @@ def import_full_backup(json_data: str) -> tuple:
     except json.JSONDecodeError as e:
         return False, f"فایل JSON معتبر نیست: {e}"
     
-    # Validate structure
     expected_tables = {'users', 'products', 'purchases', 'pending_buys', 'blacklist', 'settings', 'logs'}
     if not expected_tables.issubset(data.keys()):
         return False, "فایل پشتیبان کامل نیست. جداول مورد نیاز وجود ندارند."
     
     with _db_lock:
-        # Begin transaction
         try:
-            # Clear existing data
             for table in expected_tables:
                 _db.execute(f"DELETE FROM {table}")
             
-            # Insert new data
             for table, rows in data.items():
                 if not rows:
                     continue
-                # Get column names from first row
                 columns = list(rows[0].keys())
                 placeholders = ','.join(['?' for _ in columns])
                 col_names = ','.join(columns)
                 for row in rows:
                     values = [row.get(col) for col in columns]
                     _db.execute(f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})", values)
-            
             _db.commit()
             return True, "بازیابی با موفقیت انجام شد."
         except Exception as e:
@@ -592,23 +585,19 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     text_content = "\n".join(p for p in [message.text, message.caption] if p)
     log_action(uid, "receipt_sent", f"text={text_content}")
     
-    # Check transaction code
+    import re
     if tx_code not in text_content:
         log_action(uid, "receipt_failed_code", "12-char code not in receipt.")
         await update.message.reply_text("کد ۱۲ رقمی گفته شده، در فاکتور و رسید بانکی شما مشاهده نشد. فاکتور معتبر ارسال کنید یا لغو کنید:", reply_markup=cancel_kb())
         return
 
-    # Check seller account
     seller_account = (pending["seller_account"] or "").strip()
     if seller_account and seller_account not in text_content:
         log_action(uid, "receipt_failed_account", "Seller account not in receipt.")
         await update.message.reply_text("فاکتور نامعتبره. شماره حساب فروشنده در رسید یافت نشد.", reply_markup=cancel_kb())
         return
 
-    # Check amount
     expected_price = int(pending["price"])
-    # Pattern to find amount: "مبلغ: 4 ART" or "💰 مبلغ: 4 ART"
-    import re
     amount_pattern = r"مبلغ:\s*([\d,]+)\s*ART"
     match = re.search(amount_pattern, text_content)
     receipt_amount = None
@@ -648,7 +637,6 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     await update.message.reply_text("اوکیه و این محصول توسط شما خریداری شد و به لیست دارایی هایتان اضافه شد.", reply_markup=main_menu_kb(uid))
     log_action(uid, "purchase_success", f"code={product['code']}")
 
-    # Notify Seller exactly as requested
     buyer_name = buyer["name"] if buyer else str(uid)
     buyer_acc = buyer["bank_account"] if buyer else "ثبت نشده"
     notify_text = (f"محصول {product['name']} شما با کد یکتای {product['code']}، توسط {buyer_name} و با شماره حساب {buyer_acc} و در تاریخ و ساعت {purchased_at}، خرید کرده است.\n\n"
@@ -958,12 +946,8 @@ async def restart_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         "لطفاً چند ثانیه صبر کنید و سپس دوباره /start بزنید.",
         parse_mode='Markdown'
     )
-    # In real scenario, you might trigger a restart mechanism.
-    # For now, just inform user.
 
-# -----------------------------
-# Handlers
-# -----------------------------
+# ==================== Handlers ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1054,7 +1038,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         return
 
-    # Delete Product
     if data.startswith("delete_product:"):
         code = data.split(":")[1]
         db_exec("DELETE FROM products WHERE code = ?", (code,))
@@ -1062,7 +1045,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("محصول با موفقیت حذف شد.")
         return
 
-    # Edit Product
     if data.startswith("edit_product:"):
         code = data.split(":")[1]
         temp = get_temp(context)
@@ -1136,7 +1118,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "admin_back":
-        # Return to admin panel
         await query.edit_message_text("پنل مدیریت:", reply_markup=admin_kb())
         return
 
@@ -1150,7 +1131,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data == "admin_backup_import":
-        # This is a callback, but we need to start conversation; we'll handle via separate handler
         await admin_backup_import_start(update, context)
         return
 
@@ -1191,9 +1171,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("یوزرنیم جدید را وارد کن:", reply_markup=cancel_kb())
         return
 
-    # Register new (from start)
     if data == "register_new":
-        # Start registration flow
         context.user_data.clear()
         context.user_data['register_step'] = S_REG_NAME
         context.user_data['username'] = update.effective_user.username or ""
@@ -1203,8 +1181,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "(برای لغو /cancel بزنید)",
             parse_mode='Markdown'
         )
-        # We need to set state to registration; but since it's a callback, we'll handle in handle_message?
-        # Better to set state and reply with text; then next message will be handled by handle_message.
         set_state(context, S_REG_NAME)
         clear_temp(context)
         return
@@ -1218,21 +1194,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     uid = update.effective_user.id
     text = normalize_text(update.message.text or update.message.caption)
 
-    # Check if we are in admin backup import file state (conversation)
     state = user_state(context)
-    if state == S_ADMIN_BACKUP_IMPORT_FILE:
-        # This is handled by the conversation handler, but we also need to catch document messages
-        # Actually we'll rely on the conversation handler; but we can handle text messages for cancellation
-        if text in ["لغو", "بازگشت"]:
-            set_state(context, None)
-            clear_temp(context)
-            await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_kb(uid))
-            return
-        # Otherwise, user should send a file; we'll let the conversation handler catch it.
-        return
-
-    if state == S_RESTORE_ACCOUNT_FILE:
-        # Similar, handled by conversation handler
+    if state in (S_ADMIN_BACKUP_IMPORT_FILE, S_RESTORE_ACCOUNT_FILE):
+        # These states are handled by conversation handlers; ignore text messages here
         if text in ["لغو", "بازگشت"]:
             set_state(context, None)
             clear_temp(context)
@@ -1241,7 +1205,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if text in ["لغو", "بازگشت"]:
-        log_action(uid, "cancelled_action_text", f"State was {user_state(context)}")
+        log_action(uid, "cancelled_action_text", f"State was {state}")
         set_state(context, None)
         clear_temp(context)
         await update.message.reply_text("عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
@@ -1330,11 +1294,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("از لیست سیاه حذف شد.")
             return
 
-        # These states are handled by conversation handlers, but in case of text we ignore
-        if state in (S_ADMIN_BACKUP_IMPORT_FILE, S_RESTORE_ACCOUNT_FILE):
-            # Already handled above
-            return
-
     # Handle Main Menu Buttons
     if text == BTN_ADD:
         set_state(context, S_ADD_NAME)
@@ -1408,17 +1367,17 @@ def main() -> None:
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("cancel", cancel))
     
-    # Callback handlers
+    # Callback handlers (main)
     app.add_handler(CallbackQueryHandler(handle_callback))
     
-    # Message handler (for all non-command messages)
+    # Message handler for all non-command messages
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
     
     # Conversation handlers for backup/restore
     app.add_handler(admin_backup_import_conv)
     app.add_handler(restore_account_conv)
     
-    logger.info("Bot started.")
+    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد.")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
