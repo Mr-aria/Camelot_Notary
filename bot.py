@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import string
@@ -515,15 +516,39 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     text_content = "\n".join(p for p in [message.text, message.caption] if p)
     log_action(uid, "receipt_sent", f"text={text_content}")
     
+    # Check transaction code
     if tx_code not in text_content:
         log_action(uid, "receipt_failed_code", "12-char code not in receipt.")
         await update.message.reply_text("کد ۱۲ رقمی گفته شده، در فاکتور و رسید بانکی شما مشاهده نشد. فاکتور معتبر ارسال کنید یا لغو کنید:", reply_markup=cancel_kb())
         return
 
+    # Check seller account
     seller_account = (pending["seller_account"] or "").strip()
     if seller_account and seller_account not in text_content:
         log_action(uid, "receipt_failed_account", "Seller account not in receipt.")
         await update.message.reply_text("فاکتور نامعتبره. شماره حساب فروشنده در رسید یافت نشد.", reply_markup=cancel_kb())
+        return
+
+    # Check amount
+    expected_price = int(pending["price"])
+    # Pattern to find amount: "مبلغ: 4 ART" or "💰 مبلغ: 4 ART"
+    # Also support comma as thousands separator, and possibly spaces
+    amount_pattern = r"مبلغ:\s*([\d,]+)\s*ART"
+    match = re.search(amount_pattern, text_content)
+    receipt_amount = None
+    if match:
+        amount_str = match.group(1).replace(',', '')
+        try:
+            receipt_amount = int(amount_str)
+        except ValueError:
+            receipt_amount = None
+
+    if receipt_amount is None or receipt_amount != expected_price:
+        log_action(uid, "receipt_failed_amount", f"expected={expected_price}, got={receipt_amount}")
+        await update.message.reply_text(
+            f"مبلغ درج شده در رسید ({receipt_amount if receipt_amount is not None else 'نامشخص'} ART) با مبلغ محصول ({expected_price} ART) مطابقت ندارد. لطفاً رسید صحیح را ارسال کنید.",
+            reply_markup=cancel_kb()
+        )
         return
 
     product = db_one("SELECT * FROM products WHERE code = ?", (pending["product_code"],))
