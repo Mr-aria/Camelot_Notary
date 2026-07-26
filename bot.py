@@ -966,6 +966,7 @@ async def restart_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ==================== Handlers ====================
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """مدیریت تمام کالبک‌های دیگر (غیر از موارد مربوط به بازیابی که توسط ConversationHandler مدیریت می‌شوند)"""
     query = update.callback_query
     await query.answer()
     if not await check_access(update, context):
@@ -1086,7 +1087,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("مقدار جدید را وارد کنید:", reply_markup=cancel_kb())
         return
 
-    # Admin callbacks
+    # Admin callbacks (excluding backup/restore conversations)
     if data == "admin_users":
         rows = db_all("SELECT * FROM users ORDER BY created_at DESC")
         text = "\n".join(f"ID: {r['telegram_id']} | نام: {r['name']} | کدملی: {r['national_id']} | حساب: {r['bank_account']} | یوزرنیم: @{r['username']}" for r in rows)
@@ -1137,7 +1138,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text("پنل مدیریت:", reply_markup=admin_kb())
         return
 
-    # Admin Backup
+    # Admin Backup menu and export (not conversation)
     if data == "admin_backup":
         await admin_backup_menu(update, context)
         return
@@ -1146,23 +1147,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await admin_backup_export(update, context)
         return
 
-    if data == "admin_backup_import":
-        await admin_backup_import_start(update, context)
-        return
-
-    if data == "admin_backup_import_confirm":
-        await admin_backup_import_confirm(update, context)
-        return
-
-    # Restore account (from registration)
-    if data == "restore_account":
-        await restore_account_start(update, context)
-        return
-
-    if data == "restore_account_confirm":
-        await restore_account_confirm(update, context)
-        return
-
+    # Restart bot
     if data == "restart_bot":
         await restart_bot_callback(update, context)
         return
@@ -1211,14 +1196,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = normalize_text(update.message.text or update.message.caption)
 
     state = user_state(context)
+    # اگر در حالت بازیابی فایل هستیم، اجازه بده ConversationHandler کار خود را انجام دهد
     if state in (S_ADMIN_BACKUP_IMPORT_FILE, S_RESTORE_ACCOUNT_FILE):
-        # این حالت‌ها توسط ConversationHandler مدیریت می‌شوند
         if text in ["لغو", "بازگشت"]:
             set_state(context, None)
             clear_temp(context)
             await update.message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_kb(uid))
             return
-        return
+        return  # اجازه بده دسته‌بندی‌های دیگر (مانند Document) توسط ConversationHandler گرفته شوند
 
     if text in ["لغو", "بازگشت"]:
         log_action(uid, "cancelled_action_text", f"State was {state}")
@@ -1383,17 +1368,17 @@ def main() -> None:
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CommandHandler("cancel", cancel))
     
-    # Callback handlers (main)
-    app.add_handler(CallbackQueryHandler(handle_callback))
-    
-    # Message handler for all non-command messages
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
-    
-    # Conversation handlers for backup/restore
+    # Conversation handlers برای بازیابی (قبل از کالبک عمومی اضافه می‌شوند تا ورودی‌هایشان را بگیرند)
     app.add_handler(admin_backup_import_conv)
     app.add_handler(restore_account_conv)
     
-    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد")
+    # Callback handlers (عمومی برای بقیه موارد)
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    
+    # Message handler برای همه پیام‌های غیر از دستورات
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+    
+    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد.")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
