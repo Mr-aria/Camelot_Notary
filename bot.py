@@ -597,14 +597,22 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "buy_confirm_yes":
         temp = get_temp(context)
-        product_code = temp["buy_product_code"]
+        product_code = temp.get("buy_product_code")
+        if not product_code:
+            await query.edit_message_text("خطا: کد محصول یافت نشد. دوباره تلاش کنید.")
+            return
+
         product = db_one("SELECT * FROM products WHERE code = ?", (product_code,))
         if not product or product["status"] != "active":
             await query.edit_message_text("این محصول دیگر موجود نیست.")
             return
 
         seller = get_user(int(product["seller_id"]))
-        seller_account = seller["bank_account"] if seller else ""
+        if not seller:
+            await query.edit_message_text("فروشنده این محصول در سیستم یافت نشد.")
+            return
+
+        seller_account = seller["bank_account"] or ""
         tx_code = unique_transaction_code()
         
         db_exec("DELETE FROM pending_buys WHERE buyer_id = ?", (uid,))
@@ -616,13 +624,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         temp["transaction_code"] = tx_code
         set_state(context, S_BUY_RECEIPT)
         log_action(uid, "buy_initiated", f"code={product_code}, tx={tx_code}")
+
+        # Delete the confirmation message and send a new clear instruction message
+        await query.message.delete()
         
-        msg = (f"برو به بانک (@CamelotBank_bot) و مبلغ {fmt_money(int(product['price']))} رو به شماره حساب {seller_account} بزن.\n\n"
-               f"حتما حتما موقع انتقال وجه به حساب فروشنده، حتما حتما این کد ۱۲ کاراکتری رو توی بخش توضیحات وارد کن و عملیات رو انجام بده وگرنه در غیر اینصورت پولت گم میشه و میسوزه و چیزی گیرت نمیاد:\n\n"
-               f"`{tx_code}`\n\n"
-               f"و وقتی که انتقال وجه دادی، فاکتور رو برام فروارد کن حتما به طوری که نمایش بده این پیام هدایت شده از کیه.")
-               
-        await query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_kb())
+        msg = (
+            f"✅ مرحله بعد:\n\n"
+            f"۱. به ربات بانک (@{BANK_BOT_USERNAME}) بروید.\n"
+            f"۲. مبلغ {fmt_money(int(product['price']))} تومان را به شماره حساب زیر واریز کنید:\n"
+            f"`{seller_account}`\n\n"
+            f"⚠️ **حتماً حتماً** در بخش توضیحات انتقال وجه، کد ۱۲ کاراکتری زیر را وارد کنید:\n"
+            f"`{tx_code}`\n\n"
+            f"اگر این کد را وارد نکنید، پول شما گم می‌شود و قابل پیگیری نخواهد بود.\n\n"
+            f"۳. پس از انجام انتقال، **فاکتور (رسید)** را از ربات بانک به **همین گفتگو** فوروارد کنید.\n"
+            f"توجه: فاکتور باید مستقیماً از ربات بانک فوروارد شده باشد تا معتبر باشد.\n\n"
+            f"برای لغو عملیات، دکمه زیر را بزنید."
+        )
+        await context.bot.send_message(
+            chat_id=uid,
+            text=msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=cancel_kb()
+        )
         return
 
     # Delete Product
