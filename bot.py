@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import secrets
@@ -266,12 +265,14 @@ def clear_temp(context: ContextTypes.DEFAULT_TYPE) -> None:
 def get_temp(context: ContextTypes.DEFAULT_TYPE) -> dict:
     return context.user_data.setdefault("temp", {})
 
-def main_menu_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup([
+def main_menu_kb(uid: int) -> ReplyKeyboardMarkup:
+    rows = [
         [BTN_BUY, BTN_ADD], 
-        [BTN_ASSETS, BTN_VITRINE],
-        [BTN_ADMIN]
-    ], resize_keyboard=True)
+        [BTN_ASSETS, BTN_VITRINE]
+    ]
+    if is_owner(uid):
+        rows.append([BTN_ADMIN])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def cancel_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ لغو عملیات", callback_data="cancel_action")]])
@@ -355,7 +356,7 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return True
     set_state(context, S_REG_NAME)
     clear_temp(context)
-    await update.message.reply_text("نام کملوتی خود را وارد کنید:", reply_markup=cancel_kb())
+    await update.message.reply_text("نام کملوتی خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
     log_action(uid, "start_registration", "prompted name")
     return False
 
@@ -374,7 +375,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         db_exec("UPDATE users SET username = ?, updated_at = ? WHERE telegram_id = ?", (username, now_tehran(), uid))
         set_state(context, None)
         clear_temp(context)
-        await update.message.reply_text("به صفحه اصلی خوش آمدید.", reply_markup=main_menu_kb())
+        await update.message.reply_text("به صفحه اصلی خوش آمدید.", reply_markup=main_menu_kb(uid))
         return
         
     await ensure_registered(update, context)
@@ -399,21 +400,21 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     if state == S_REG_NAME:
         temp["name"] = text
         set_state(context, S_REG_NID)
-        await update.message.reply_text("کدملی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=cancel_kb())
+        await update.message.reply_text("کدملی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=ReplyKeyboardRemove())
         return True
 
     if state == S_REG_NID:
         if not (text.isdigit() and len(text) == 6):
-            await update.message.reply_text("خطا: کدملی باید دقیقاً ۶ رقم و فقط عدد باشد. دوباره وارد کنید:", reply_markup=cancel_kb())
+            await update.message.reply_text("خطا: کدملی باید دقیقاً ۶ رقم و فقط عدد باشد. دوباره وارد کنید:", reply_markup=ReplyKeyboardRemove())
             return True
         temp["national_id"] = text
         set_state(context, S_REG_ACCOUNT)
-        await update.message.reply_text("شماره حساب بانکی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=cancel_kb())
+        await update.message.reply_text("شماره حساب بانکی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=ReplyKeyboardRemove())
         return True
 
     if state == S_REG_ACCOUNT:
         if not (text.isdigit() and len(text) == 6):
-            await update.message.reply_text("خطا: شماره حساب باید دقیقاً ۶ رقم و فقط عدد باشد. دوباره وارد کنید:", reply_markup=cancel_kb())
+            await update.message.reply_text("خطا: شماره حساب باید دقیقاً ۶ رقم و فقط عدد باشد. دوباره وارد کنید:", reply_markup=ReplyKeyboardRemove())
             return True
             
         temp["bank_account"] = text
@@ -442,7 +443,7 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
         log_action(uid, "registered", f"name={temp.get('name','')}, nid={temp.get('national_id','')}, acc={temp.get('bank_account','')}")
         set_state(context, None)
         clear_temp(context)
-        await update.message.reply_text("ثبت نام شما با موفقیت انجام شد.", reply_markup=main_menu_kb())
+        await update.message.reply_text("ثبت نام شما با موفقیت انجام شد.", reply_markup=main_menu_kb(uid))
         return True
 
     return False
@@ -543,7 +544,7 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     )
     db_exec("DELETE FROM pending_buys WHERE buyer_id = ?", (uid,))
     
-    await update.message.reply_text("اوکیه و این محصول توسط شما خریداری شد و به لیست دارایی هایتان اضافه شد.", reply_markup=main_menu_kb())
+    await update.message.reply_text("اوکیه و این محصول توسط شما خریداری شد و به لیست دارایی هایتان اضافه شد.", reply_markup=main_menu_kb(uid))
     log_action(uid, "purchase_success", f"code={product['code']}")
 
     # Notify Seller exactly as requested
@@ -578,7 +579,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         set_state(context, None)
         clear_temp(context)
         await query.message.delete()
-        await context.bot.send_message(chat_id=uid, text="عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb())
+        await context.bot.send_message(chat_id=uid, text="عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
         return
 
     if data == "add_confirm_yes":
@@ -591,7 +592,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         log_action(uid, "product_added", f"code={code}")
         set_state(context, None)
         await query.edit_message_text(f"محصول با موفقیت اضافه شد.\n\nکد یکتا: {code}\nنام: {temp['name']}")
-        await context.bot.send_message(chat_id=uid, text="به صفحه اصلی بازگشتید.", reply_markup=main_menu_kb())
+        await context.bot.send_message(chat_id=uid, text="به صفحه اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
         return
 
     if data == "buy_confirm_yes":
@@ -742,7 +743,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         log_action(uid, "cancelled_action_text", f"State was {user_state(context)}")
         set_state(context, None)
         clear_temp(context)
-        await update.message.reply_text("عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb())
+        await update.message.reply_text("عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
         return
 
     # Auth Flow Check
@@ -792,7 +793,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 db_exec(f"UPDATE products SET {field} = ? WHERE code = ?", (text, code))
             log_action(uid, "product_edited", f"code={code}, field={field}, val={text}")
             set_state(context, None)
-            await update.message.reply_text("ویرایش انجام شد.", reply_markup=main_menu_kb())
+            await update.message.reply_text("ویرایش انجام شد.", reply_markup=main_menu_kb(uid))
             return
 
         # Admin States
@@ -869,7 +870,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await admin_cmd(update, context)
         return
 
-    await update.message.reply_text("لطفاً یک گزینه انتخاب کنید:", reply_markup=main_menu_kb())
+    await update.message.reply_text("لطفاً یک گزینه انتخاب کنید:", reply_markup=main_menu_kb(uid))
 
 def main() -> None:
     app = ApplicationBuilder().token(BOT_TOKEN).build()
