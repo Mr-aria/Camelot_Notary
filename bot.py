@@ -1374,7 +1374,7 @@ def main() -> None:
     app.add_handler(admin_backup_import_conv)
     app.add_handler(restore_account_conv)
     
-    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد.")
+    logger.info("ربات با قابلیت پشتیبان‌گیری و بازیابی راه‌اندازی شد")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
