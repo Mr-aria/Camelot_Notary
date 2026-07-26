@@ -625,9 +625,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         set_state(context, S_BUY_RECEIPT)
         log_action(uid, "buy_initiated", f"code={product_code}, tx={tx_code}")
 
-        # Delete the confirmation message and send a new clear instruction message
-        await query.message.delete()
-        
+        # Build the instruction message
         msg = (
             f"✅ مرحله بعد:\n\n"
             f"۱. به ربات بانک (@{BANK_BOT_USERNAME}) بروید.\n"
@@ -640,12 +638,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"توجه: فاکتور باید مستقیماً از ربات بانک فوروارد شده باشد تا معتبر باشد.\n\n"
             f"برای لغو عملیات، دکمه زیر را بزنید."
         )
-        await context.bot.send_message(
-            chat_id=uid,
-            text=msg,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=cancel_kb()
-        )
+
+        # Send the new message first, then delete the old confirmation message
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=msg,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=cancel_kb()
+            )
+            # Now delete the old message
+            await query.message.delete()
+        except Exception as e:
+            logger.error(f"Error sending purchase instruction: {e}")
+            # If sending failed, inform the user and keep the old message
+            await query.edit_message_text(
+                "خطا در ارسال دستورالعمل خرید. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+                reply_markup=confirm_kb("buy_confirm_yes", "cancel_action")
+            )
         return
 
     # Delete Product
