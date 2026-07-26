@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Camelot Telegram Marketplace Bot - با قابلیت پشتیبان‌گیری و بازیابی"""
+"""Camelot Telegram Marketplace Bot - با پشتیبان‌گیری و بازیابی کامل"""
 
 from __future__ import annotations
 
@@ -336,7 +336,7 @@ def safe_send_chunks(text: str, max_len: int = 3900) -> List[str]:
 # ==================== Backup & Restore Functions ====================
 
 def export_full_backup() -> str:
-    """Export all tables as JSON."""
+    """خروجی کامل دیتابیس به صورت JSON"""
     tables = ['users', 'products', 'purchases', 'pending_buys', 'blacklist', 'settings', 'logs']
     data = {}
     with _db_lock:
@@ -347,10 +347,7 @@ def export_full_backup() -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 def import_full_backup(json_data: str) -> tuple:
-    """
-    Restore database from JSON backup.
-    Returns (success: bool, message: str)
-    """
+    """بازیابی دیتابیس از فایل JSON"""
     try:
         data = json.loads(json_data)
     except json.JSONDecodeError as e:
@@ -409,7 +406,7 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     uid = update.effective_user.id
     if get_user(uid):
         return True
-    # If owner, show restore option
+    # اگر مالک است، گزینه بازیابی و ثبت‌نام جدید نشان داده شود
     if is_owner(uid):
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 بازیابی اطلاعات", callback_data="restore_account")],
@@ -653,7 +650,7 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
 # ==================== Backup/Restore Handlers ====================
 
 async def admin_backup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show backup/restore menu in admin panel."""
+    """نمایش منوی پشتیبان‌گیری و بازیابی در پنل مدیریت"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -676,7 +673,7 @@ async def admin_backup_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 async def admin_backup_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Export backup and send as file."""
+    """خروجی پشتیبان و ارسال به عنوان فایل"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -713,7 +710,7 @@ async def admin_backup_export(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 async def admin_backup_import_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start import process: ask for file."""
+    """شروع فرایند بازیابی با درخواست فایل"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -734,7 +731,7 @@ async def admin_backup_import_start(update: Update, context: ContextTypes.DEFAUL
     return S_ADMIN_BACKUP_IMPORT_FILE
 
 async def admin_backup_import_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receive the file and ask for confirmation."""
+    """دریافت فایل و درخواست تأیید"""
     uid = update.effective_user.id
     if not is_owner(uid):
         await update.message.reply_text("⛔ دسترسی ندارید.")
@@ -784,7 +781,7 @@ async def admin_backup_import_file(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
 async def admin_backup_import_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Execute the import."""
+    """اجرای بازیابی"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -825,7 +822,7 @@ async def admin_backup_import_confirm(update: Update, context: ContextTypes.DEFA
 # ==================== Restore Account for Owner ====================
 
 async def restore_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Start restore account flow (only for owner)."""
+    """شروع بازیابی حساب برای مالک (هنگام ثبت‌نام)"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -845,7 +842,7 @@ async def restore_account_start(update: Update, context: ContextTypes.DEFAULT_TY
     return S_RESTORE_ACCOUNT_FILE
 
 async def restore_account_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Receive file for restore account."""
+    """دریافت فایل برای بازیابی حساب"""
     uid = update.effective_user.id
     if not is_owner(uid):
         await update.message.reply_text("⛔ دسترسی ندارید.")
@@ -895,7 +892,7 @@ async def restore_account_file(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
 async def restore_account_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Execute restore for owner."""
+    """اجرای بازیابی برای مالک"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -934,7 +931,7 @@ async def restore_account_confirm(update: Update, context: ContextTypes.DEFAULT_
     context.user_data.pop('backup_json_data', None)
 
 async def restart_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Restart bot placeholder."""
+    """دستور ری‌استارت (فقط پیام)</!DOCTYPE html>"""
     query = update.callback_query
     await query.answer()
     uid = update.effective_user.id
@@ -1196,7 +1193,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     state = user_state(context)
     if state in (S_ADMIN_BACKUP_IMPORT_FILE, S_RESTORE_ACCOUNT_FILE):
-        # These states are handled by conversation handlers; ignore text messages here
+        # این حالت‌ها توسط ConversationHandler مدیریت می‌شوند
         if text in ["لغو", "بازگشت"]:
             set_state(context, None)
             clear_temp(context)
@@ -1211,13 +1208,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
         return
 
-    # Auth Flow Check
+    # اگر کاربر ثبت‌نام نکرده است
     if not get_user(uid):
         if await handle_registration(update, context, text):
             return
         return
 
-    # Handle Active States
+    # مدیریت وضعیت‌های فعال
     if state:
         if state in {S_REG_NAME, S_REG_NID, S_REG_ACCOUNT}:
             if await handle_registration(update, context, text): return
@@ -1259,7 +1256,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("ویرایش انجام شد.", reply_markup=main_menu_kb(uid))
             return
 
-        # Admin States
+        # وضعیت‌های مدیریتی
         if state == S_ADMIN_GET_USER_ID:
             row = get_user(int(text))
             if not row:
@@ -1294,7 +1291,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("از لیست سیاه حذف شد.")
             return
 
-    # Handle Main Menu Buttons
+    # دکمه‌های منوی اصلی
     if text == BTN_ADD:
         set_state(context, S_ADD_NAME)
         clear_temp(context)
@@ -1337,7 +1334,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 # ==================== Conversation Handlers ====================
 
-# Admin Backup Import Conversation
+# ConversationHandler برای بازیابی از پشتیبان در پنل مدیریت
 admin_backup_import_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(admin_backup_import_start, pattern="^admin_backup_import$")],
     states={
@@ -1347,7 +1344,7 @@ admin_backup_import_conv = ConversationHandler(
     fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel)],
 )
 
-# Restore Account Conversation (for owner during registration)
+# ConversationHandler برای بازیابی حساب مالک هنگام ثبت‌نام
 restore_account_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(restore_account_start, pattern="^restore_account$")],
     states={
