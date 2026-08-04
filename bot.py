@@ -385,7 +385,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
         return False
     
     if user_is_blacklisted(uid):
-        msg = "شما مسدود شده اید"
+        msg = "دسترسی های شما، توسط مدیریت مسدود شده است!"
         if update.message:
             await update.message.reply_text(msg)
         elif update.callback_query:
@@ -393,7 +393,7 @@ async def check_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
         return False
         
     if not bot_is_on() and not is_owner(uid):
-        msg = "ربات خاموشه"
+        msg = "این اداره، توسط هیئت مدیره، بسته شده است!"
         if update.message:
             await update.message.reply_text(msg)
         elif update.callback_query:
@@ -413,7 +413,7 @@ async def ensure_registered(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             [InlineKeyboardButton("📝 ثبت‌نام جدید", callback_data="register_new")]
         ])
         await update.message.reply_text(
-            "🏦 **به ثبت‌اسناد کملوت خوش آمدید!**\n\n"
+            "🏦 **به اداره ثبت‌اسناد کملوت خوش آمدید!**\n\n"
             "شما به عنوان مالک وارد شده‌اید.\n"
             "• اگر قبلاً حساب داشته‌اید و اطلاعات آن را بازیابی کرده‌اید، روی «بازیابی اطلاعات» کلیک کنید.\n"
             "• اگر می‌خواهید حساب جدید بسازید، روی «ثبت‌نام جدید» کلیک کنید.",
@@ -461,7 +461,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         db_exec("UPDATE users SET username = ?, updated_at = ? WHERE telegram_id = ?", (username, now_tehran(), uid))
         set_state(context, None)
         clear_temp(context)
-        await update.message.reply_text("به صفحه اصلی خوش آمدید.", reply_markup=main_menu_kb(uid))
+        await update.message.reply_text("صفحه اصلی", reply_markup=main_menu_kb(uid))
         return
         
     await ensure_registered(update, context)
@@ -486,7 +486,7 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
     if state == S_REG_NAME:
         temp["name"] = text
         set_state(context, S_REG_NID)
-        await update.message.reply_text("کدملی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("کدملی خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
         return True
 
     if state == S_REG_NID:
@@ -495,7 +495,7 @@ async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
             return True
         temp["national_id"] = text
         set_state(context, S_REG_ACCOUNT)
-        await update.message.reply_text("شماره حساب بانکی خود را وارد کنید (باید ۶ رقمی و عدد باشد):", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("شماره حساب بانکی خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
         return True
 
     if state == S_REG_ACCOUNT:
@@ -546,22 +546,22 @@ async def handle_add_product(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if state == S_ADD_NAME:
         temp["name"] = text
         set_state(context, S_ADD_PRICE)
-        await update.message.reply_text("مبلغ محصول را وارد کن:", reply_markup=cancel_kb())
+        await update.message.reply_text("مبلغ محصول را وارد کنید:", reply_markup=cancel_kb())
         return True
 
     if state == S_ADD_PRICE:
         if not text.isdigit():
-            await update.message.reply_text("لطفا مبلغ را به صورت عدد وارد کن:", reply_markup=cancel_kb())
+            await update.message.reply_text("لطفا مبلغ را به صورت عدد و ترجیحا اعداد انگلیسی و نه فارسی، وارد کنید:", reply_markup=cancel_kb())
             return True
         temp["price"] = int(text)
         set_state(context, S_ADD_LINK)
-        await update.message.reply_text("لینک پست محصول را بفرست:", reply_markup=cancel_kb())
+        await update.message.reply_text("لینک پست تلگرامی محصول که در فروشگاه خود قرار داده اید را بفرستید:", reply_markup=cancel_kb())
         return True
 
     if state == S_ADD_LINK:
         temp["link"] = text
         seller_name = get_user_display(uid)
-        preview = (f"{seller_name}، آیا مطمئنی که میخوای محصول {temp.get('name')} رو با مبلغ {fmt_money(temp.get('price'))} رو با لینک پست {temp.get('link')} رو به ویترین فروشت اضافه کنی؟")
+        preview = (f"{seller_name}، آیا مطمئنی که میخواهید محصول {temp.get('name')} رو با مبلغ {fmt_money(temp.get('price'))} رو با لینک پست {temp.get('link')} رو به ویترین فروشت اضافه کنی؟")
         await update.message.reply_text(preview, reply_markup=confirm_kb("add_confirm_yes", "cancel_action"))
         return True
 
@@ -604,13 +604,13 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     import re
     if tx_code not in text_content:
         log_action(uid, "receipt_failed_code", "12-char code not in receipt.")
-        await update.message.reply_text("کد ۱۲ رقمی گفته شده، در فاکتور و رسید بانکی شما مشاهده نشد. فاکتور معتبر ارسال کنید یا لغو کنید:", reply_markup=cancel_kb())
+        await update.message.reply_text("فاکتور نامعتبر!!", reply_markup=cancel_kb())
         return
 
     seller_account = (pending["seller_account"] or "").strip()
     if seller_account and seller_account not in text_content:
         log_action(uid, "receipt_failed_account", "Seller account not in receipt.")
-        await update.message.reply_text("فاکتور نامعتبره. شماره حساب فروشنده در رسید یافت نشد.", reply_markup=cancel_kb())
+        await update.message.reply_text("فاکتور نامعتبر!!", reply_markup=cancel_kb())
         return
 
     expected_price = int(pending["price"])
@@ -650,13 +650,13 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
     )
     db_exec("DELETE FROM pending_buys WHERE buyer_id = ?", (uid,))
     
-    await update.message.reply_text("اوکیه و این محصول توسط شما خریداری شد و به لیست دارایی هایتان اضافه شد.", reply_markup=main_menu_kb(uid))
+    await update.message.reply_text("خرید با موفقیت انجام شد! سند این محصول به نام شم ثبت و تایید گردید.", reply_markup=main_menu_kb(uid))
     log_action(uid, "purchase_success", f"code={product['code']}")
 
     buyer_name = buyer["name"] if buyer else str(uid)
     buyer_acc = buyer["bank_account"] if buyer else "ثبت نشده"
     notify_text = (f"محصول {product['name']} شما با کد یکتای {product['code']}، توسط {buyer_name} و با شماره حساب {buyer_acc} و در تاریخ و ساعت {purchased_at}، خرید کرده است.\n\n"
-                   f"درصورت نیامدن پول به حساب شما، می‌توانید شکایت خود را به دادگاه عدالت کملوت ثبت کنید.")
+                   f"درصورت نیامدن پول به حساب شما، یا رخدادن کلاهبرداری، می‌توانید شکایت خود را در دادگاه عدالت کملوت ثبت کنید.")
     
     try:
         await context.bot.send_message(chat_id=int(seller["telegram_id"]), text=notify_text)
@@ -1028,12 +1028,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         msg = (
             f"✅ مرحله بعد:\n\n"
-            f"۱. به ربات بانک (@{BANK_BOT_USERNAME}) بروید.\n"
+            f"۱. به  بانک (@{BANK_BOT_USERNAME}) بروید.\n"
             f"۲. مبلغ {fmt_money(int(product['price']))} تومان را به شماره حساب زیر واریز کنید:\n"
             f"<code>{seller_account}</code>\n\n"
             f"⚠️ <b>حتماً حتماً</b> در بخش توضیحات انتقال وجه، کد ۱۲ کاراکتری زیر را وارد کنید:\n"
             f"<code>{tx_code}</code>\n\n"
-            f"اگر این کد را وارد نکنید، پول شما گم می‌شود و قابل پیگیری نخواهد بود.\n\n"
+            f"اگر این کد را در بخش توضیحات وارد نکنید، پول شما گم می‌شود و قابل پیگیری نخواهد بود.\n\n"
             f"۳. پس از انجام انتقال، <b>فاکتور (رسید)</b> را از ربات بانک به <b>همین گفتگو</b> فوروارد کنید.\n"
             f"توجه: فاکتور باید مستقیماً از ربات بانک فوروارد شده باشد تا معتبر باشد.\n\n"
             f"برای لغو عملیات، دکمه زیر را بزنید."
@@ -1050,7 +1050,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception as e:
             logger.error(f"Error sending purchase instruction: {e}")
             await query.edit_message_text(
-                "خطا در ارسال دستورالعمل خرید. لطفاً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+                "خطا در ارسال دستورالعمل خرید. لطفاً دوباره تلاش کنید.",
                 reply_markup=confirm_kb("buy_confirm_yes", "cancel_action")
             )
         return
@@ -1232,7 +1232,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update.message.reply_text("محصولی با این کد پیدا نشد.", reply_markup=cancel_kb())
                 return
             if product["status"] != "active":
-                await update.message.reply_text("این محصول قبلاً فروخته شده است.", reply_markup=cancel_kb())
+                await update.message.reply_text("این محصول قبلاً فروخته شده یا درحال حاضر در دسترس نیست.", reply_markup=cancel_kb())
                 return
                 
             get_temp(context)["buy_product_code"] = product["code"]
@@ -1311,7 +1311,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if text == BTN_VITRINE:
         rows = db_all("SELECT * FROM products WHERE status = 'active' AND seller_id = ? ORDER BY created_at DESC", (uid,))
         if not rows:
-            await update.message.reply_text("ویترین شما خالی است. فقط محصولاتی که شما اضافه کرده‌اید اینجا نمایش داده می‌شوند.")
+            await update.message.reply_text("ویترین شما خالی است. فقط محصولاتی که شما به مغازه خود اضافه کرده‌اید و قابل فروش اند. اینجا نمایش داده می‌شوند، درصورت تمایل برای فروش محصولات خود، از دکمه افزودن محصول استفاده کنید0.")
             return
         for r in rows:
             seller = get_user(r["seller_id"])
@@ -1323,7 +1323,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if text == BTN_ASSETS:
         rows = db_all("SELECT p.* FROM purchases pu JOIN products p ON p.code = pu.product_code WHERE pu.buyer_id = ? ORDER BY pu.purchased_at DESC", (uid,))
         if not rows:
-            await update.message.reply_text("دارایی برای شما یافت نشد.")
+            await update.message.reply_text("سند محصولی برای شما ثبت نشده است!")
             return
         for r in rows:
             msg = f"کد: {r['code']}\nنام: {r['name']}\nقیمت: {fmt_money(int(r['price']))}\nلینک: {r['link']}"
