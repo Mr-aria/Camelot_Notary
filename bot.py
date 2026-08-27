@@ -488,9 +488,10 @@ def main_menu_kb(uid: int) -> ReplyKeyboardMarkup:
     rows = [
         [BTN_BUY, BTN_ADD],
         [BTN_ASSETS, BTN_VITRINE],
-        [BTN_MY_STORES, BTN_ADD_STORE],
     ]
     if is_owner(uid):
+        # Only the bot owner sees "Add Store" and "My Stores" buttons
+        rows.append([BTN_MY_STORES, BTN_ADD_STORE])
         rows.append([BTN_ADMIN])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
@@ -2289,6 +2290,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if text == BTN_ADD_STORE:
+        if not is_owner(uid):
+            await update.message.reply_text("⛔ این گزینه فقط برای مالک ربات فعال است.", reply_markup=main_menu_kb(uid))
+            return
         # Show options: create new, or join existing
         await update.message.reply_text(
             "🏪 **مدیریت فروشگاه**\n\nیکی از گزینه‌ها را انتخاب کنید:",
@@ -2302,6 +2306,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if text == BTN_MY_STORES:
+        if not is_owner(uid):
+            await update.message.reply_text("⛔ این گزینه فقط برای مالک ربات فعال است.", reply_markup=main_menu_kb(uid))
+            return
         stores = get_user_stores(uid)
         if not stores:
             await update.message.reply_text("شما عضو هیچ فروشگاهی نیستید.", reply_markup=main_menu_kb(uid))
