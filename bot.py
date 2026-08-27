@@ -488,10 +488,11 @@ def main_menu_kb(uid: int) -> ReplyKeyboardMarkup:
     rows = [
         [BTN_BUY, BTN_ADD],
         [BTN_ASSETS, BTN_VITRINE],
+        [BTN_MY_STORES],  # visible to all users
     ]
     if is_owner(uid):
-        # Only the bot owner sees "Add Store" and "My Stores" buttons
-        rows.append([BTN_MY_STORES, BTN_ADD_STORE])
+        # Only the bot owner sees "Add Store" button + admin panel
+        rows.append([BTN_ADD_STORE])
         rows.append([BTN_ADMIN])
     return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
@@ -713,20 +714,28 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # -----------------------------
 
 async def prompt_store_choice_for_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """After account is created, show list of stores to join (or create new)."""
+    """After account is created, show list of stores to join. Only owner sees 'create new' option."""
     uid = update.effective_user.id
     stores = list_all_stores()
     rows = []
     for s in stores[:20]:  # cap to avoid huge keyboards
         rows.append([InlineKeyboardButton(f"🏪 {s['name']} (#{s['id']})", callback_data=f"reg_pick_store:{s['id']}")])
-    rows.append([InlineKeyboardButton("➕ ساخت فروشگاه جدید", callback_data="reg_new_store")])
+    if is_owner(uid):
+        # Only the bot owner can create new stores during registration
+        rows.append([InlineKeyboardButton("➕ ساخت فروشگاه جدید", callback_data="reg_new_store")])
     rows.append([InlineKeyboardButton("❌ لغو", callback_data="cancel_action")])
-    await update.message.reply_text(
-        "🏪 **انتخاب فروشگاه**\n\n"
-        "یک فروشگاه موجود را انتخاب کنید تا به آن بپیوندید، یا فروشگاه جدیدی بسازید.",
-        reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode='Markdown',
-    )
+    msg = "🏪 **انتخاب فروشگاه**\n\n"
+    if stores:
+        msg += "یک فروشگاه موجود را انتخاب کنید تا به آن بپیوندید."
+        if is_owner(uid):
+            msg += "\nیا فروشگاه جدیدی بسازید."
+    else:
+        msg += "فروشگاهی ثبت نشده است. "
+        if is_owner(uid):
+            msg += "می‌توانید یک فروشگاه جدید بسازید."
+        else:
+            msg += "لطفاً منتظر بمانید تا مالک ربات فروشگاهی ایجاد کند."
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(rows), parse_mode='Markdown')
 
 
 async def handle_registration(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
@@ -1271,6 +1280,127 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         clear_temp(context)
         await query.message.delete()
         await context.bot.send_message(chat_id=uid, text="عملیات لغو شد. به منوی اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
+        return
+
+    # ---- User browse & join stores (from "My Stores" menu) ----
+    if data == "user_browse_stores":
+        all_stores = list_all_stores()
+        my_stores = get_user_stores(uid)
+        my_ids = {s["id"] for s in my_stores}
+        available = [s for s in all_stores if s["id"] not in my_ids]
+        if not available:
+            await query.edit_message_text(
+                "🏬 هیچ فروشگاه دیگری برای پیوستن وجود ندارد.\n(شما عضو همه فروشگاه‌ها هستید یا فروشگاهی ثبت نشده)",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")]]),
+            )
+            return
+        rows = []
+        for s in available[:20]:
+            mgr = get_store_manager(s["id"])
+            mgr_name = mgr["name"] if mgr else "—"
+            rows.append([InlineKeyboardButton(
+                f"#{s['id']} | {s['name']} (مدیر: {mgr_name})",
+                callback_data=f"user_pick_store:{s['id']}"
+            )])
+        rows.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")])
+        await query.edit_message_text(
+            "🏬 **انتخاب فروشگاه**\n\nیکی از فروشگاه‌های زیر را برای پیوستن انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup(rows),
+            parse_mode='Markdown',
+        )
+        return
+
+    if data == "my_stores_back":
+        # Re-render "My Stores" list
+        stores = get_user_stores(uid)
+        lines = []
+        if stores:
+            for s in stores:
+                mgr = get_store_manager(s["id"])
+                members = get_store_members(s["id"])
+                role_label = "👑 مدیر" if s["role"] == ROLE_MANAGER else "🧑‍🔧 کارمند"
+                mgr_name = mgr["name"] if mgr else "—"
+                lines.append(f"#{s['id']} | {s['name']} | {role_label} | مدیر فعلی: {mgr_name} | {len(members)} عضو")
+            text_out = "🏬 **فروشگاه‌های من**\n\n" + "\n".join(lines)
+        else:
+            text_out = "🏬 **فروشگاه‌های من**\n\nشما هنوز عضو هیچ فروشگاهی نیستید."
+
+        kb_rows = [
+            [InlineKeyboardButton("➕ دریافت فروشگاه‌های دیگر", callback_data="user_browse_stores")],
+        ]
+        managed = get_user_managed_stores(uid)
+        if managed:
+            if len(managed) == 1:
+                kb_rows.append([InlineKeyboardButton(f"👥 مدیریت کارکنان «{managed[0]['name']}»", callback_data=f"mgr_emp_store:{managed[0]['id']}")])
+            else:
+                kb_rows.append([InlineKeyboardButton("👥 مدیریت کارکنان", callback_data="mgr_employees")])
+        kb_rows.append([InlineKeyboardButton("❌ بستن", callback_data="cancel_action")])
+        await query.edit_message_text(text_out, reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode='Markdown')
+        return
+
+    if data.startswith("user_pick_store:"):
+        store_id = int(data.split(":")[1])
+        store = get_store(store_id)
+        if not store:
+            await query.edit_message_text("❌ فروشگاه یافت نشد.")
+            return
+        # Already a member?
+        if get_user_role_in_store(uid, store_id) is not None:
+            await query.edit_message_text("ℹ️ شما عضو این فروشگاه هستید.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")]]))
+            return
+        get_temp(context)["reg_store_id"] = store_id
+        await query.edit_message_text(
+            f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 مدیر", callback_data="user_join_role:manager")],
+                [InlineKeyboardButton("🧑‍🔧 کارمند", callback_data="user_join_role:employee")],
+                [InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")],
+            ]),
+            parse_mode='Markdown',
+        )
+        return
+
+    if data.startswith("user_join_role:"):
+        role = data.split(":")[1]
+        if role not in (ROLE_MANAGER, ROLE_EMPLOYEE):
+            return
+        store_id = int(get_temp(context).get("reg_store_id", 0))
+        store = get_store(store_id)
+        if not store:
+            await query.edit_message_text("❌ فروشگاه یافت نشد.")
+            return
+        if get_user_role_in_store(uid, store_id) is not None:
+            await query.edit_message_text("ℹ️ شما عضو این فروشگاه هستید.")
+            return
+        # If user picked "manager" and store already has a manager, demote old manager
+        if role == ROLE_MANAGER:
+            old = get_store_manager(store_id)
+            if old and int(old["telegram_id"]) != uid:
+                db_exec(
+                    "UPDATE store_members SET role = ? WHERE store_id = ? AND user_id = ?",
+                    (ROLE_EMPLOYEE, store_id, int(old["telegram_id"])),
+                )
+                try:
+                    await context.bot.send_message(
+                        chat_id=int(old["telegram_id"]),
+                        text=f"ℹ️ شما از مدیریت فروشگاه «{store['name']}» به نقش کارمند تغییر یافتید."
+                    )
+                except Exception:
+                    pass
+        db_exec(
+            "INSERT OR REPLACE INTO store_members(store_id, user_id, role, joined_at) VALUES(?, ?, ?, ?)",
+            (store_id, uid, role, now_tehran()),
+        )
+        db_exec("UPDATE stores SET owner_id = ?, updated_at = ? WHERE id = ?", (uid, now_tehran(), store_id))
+        log_action(uid, "joined_store_via_browse", f"store_id={store_id}, role={role}")
+        set_state(context, None)
+        clear_temp(context)
+        role_label = "مدیر" if role == ROLE_MANAGER else "کارمند"
+        await query.edit_message_text(
+            f"✅ شما با موفقیت به فروشگاه «{store['name']}» به عنوان **{role_label}** پیوستید.",
+            parse_mode='Markdown',
+        )
+        await context.bot.send_message(chat_id=uid, text="به منوی اصلی بازگشتید.", reply_markup=main_menu_kb(uid))
         return
 
     # ---- Registration: store choice ----
@@ -2306,22 +2436,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if text == BTN_MY_STORES:
-        if not is_owner(uid):
-            await update.message.reply_text("⛔ این گزینه فقط برای مالک ربات فعال است.", reply_markup=main_menu_kb(uid))
-            return
         stores = get_user_stores(uid)
-        if not stores:
-            await update.message.reply_text("شما عضو هیچ فروشگاهی نیستید.", reply_markup=main_menu_kb(uid))
-            return
         lines = []
-        for s in stores:
-            mgr = get_store_manager(s["id"])
-            members = get_store_members(s["id"])
-            role_label = "👑 مدیر" if s["role"] == ROLE_MANAGER else "🧑‍🔧 کارمند"
-            mgr_name = mgr["name"] if mgr else "—"
-            lines.append(f"#{s['id']} | {s['name']} | {role_label} | مدیر فعلی: {mgr_name} | {len(members)} عضو")
-        text_out = "🏬 **فروشگاه‌های من**\n\n" + "\n".join(lines)
-        kb_rows = []
+        if stores:
+            for s in stores:
+                mgr = get_store_manager(s["id"])
+                members = get_store_members(s["id"])
+                role_label = "👑 مدیر" if s["role"] == ROLE_MANAGER else "🧑‍🔧 کارمند"
+                mgr_name = mgr["name"] if mgr else "—"
+                lines.append(f"#{s['id']} | {s['name']} | {role_label} | مدیر فعلی: {mgr_name} | {len(members)} عضو")
+            text_out = "🏬 **فروشگاه‌های من**\n\n" + "\n".join(lines)
+        else:
+            text_out = "🏬 **فروشگاه‌های من**\n\nشما هنوز عضو هیچ فروشگاهی نیستید. می‌توانید از دکمه «دریافت فروشگاه‌های دیگر» یک فروشگاه را انتخاب کنید."
+
+        kb_rows = [
+            [InlineKeyboardButton("➕ دریافت فروشگاه‌های دیگر", callback_data="user_browse_stores")],
+        ]
         # If user manages any store, show "manage employees" button
         managed = get_user_managed_stores(uid)
         if managed:
