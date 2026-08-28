@@ -1,4 +1,4 @@
-# -*- coding: utf8 -*-
+# -*- coding: utf-8 -*-
 """Camelot Telegram Marketplace Bot - v2: Stores & Roles"""
 
 from __future__ import annotations
@@ -458,6 +458,14 @@ def get_store_employees(store_id: int) -> List[sqlite3.Row]:
         (store_id,),
     )
 
+def store_has_non_owner_manager(store_id: int) -> bool:
+    """True if the store has any manager other than the bot owner."""
+    rows = db_all(
+        "SELECT user_id FROM store_members WHERE store_id = ? AND role = 'manager' AND user_id != ?",
+        (store_id, OWNER_ID),
+    )
+    return len(rows) > 0
+
 def get_store_active_account(store_id: int) -> str:
     """Account that should receive payments for this store. Always the manager's account."""
     mgr = get_store_manager(store_id)
@@ -479,6 +487,42 @@ def get_user_managed_stores(uid: int) -> List[sqlite3.Row]:
         """,
         (uid,),
     )
+
+async def notify_membership_change(context: ContextTypes.DEFAULT_TYPE, store_id: int, new_member_uid: int, role: str) -> None:
+    """Send notification to the bot owner and current store manager(s) about new membership."""
+    store = get_store(store_id)
+    if not store:
+        return
+    new_member = get_user(new_member_uid)
+    if not new_member:
+        return
+    role_label = "مدیر" if role == ROLE_MANAGER else "کارمند"
+    text = (
+        f"🔔 **تغییر عضویت در فروشگاه**\n\n"
+        f"🏪 فروشگاه: {store['name']}\n"
+        f"👤 کاربر جدید: {new_member['name']} (id: {new_member_uid})\n"
+        f"🎖 سطح دسترسی: {role_label}\n"
+        f"🕐 زمان: {now_tehran()}"
+    )
+    # Notify the bot owner (if not the new member)
+    if not is_owner(new_member_uid):
+        try:
+            await context.bot.send_message(chat_id=OWNER_ID, text=text, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Failed to notify owner about membership: {e}")
+    # Notify current manager(s) of the store (if not the new member and not the owner)
+    managers = db_all(
+        "SELECT user_id FROM store_members WHERE store_id = ? AND role = 'manager'",
+        (store_id,),
+    )
+    for mgr in managers:
+        mgr_uid = int(mgr["user_id"])
+        if mgr_uid == new_member_uid or mgr_uid == OWNER_ID:
+            continue
+        try:
+            await context.bot.send_message(chat_id=mgr_uid, text=text, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Failed to notify manager {mgr_uid}: {e}")
 
 # -----------------------------
 # Keyboards
@@ -528,12 +572,14 @@ def confirm_kb(yes_data: str, no_data: str = "cancel_action") -> InlineKeyboardM
 
 def product_actions_kb(code: str, seller_id: int, store_id: int, viewer_id: int) -> InlineKeyboardMarkup:
     rows = []
-    # Owner can edit, manager of the store can edit, original seller can edit
-    can_edit = (
-        is_owner(viewer_id)
-        or viewer_id == seller_id
-        or user_is_store_manager(viewer_id, store_id)
-    )
+    # Permission to edit: owner, OR any member of the store the product belongs to
+    can_edit = False
+    if is_owner(viewer_id):
+        can_edit = True
+    elif store_id and get_user_role_in_store(viewer_id, int(store_id)) is not None:
+        can_edit = True
+    elif viewer_id == seller_id:
+        can_edit = True
     if can_edit:
         rows.append([
             InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_product:{code}"),
@@ -1349,15 +1395,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("ℹ️ شما عضو این فروشگاه هستید.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")]]))
             return
         get_temp(context)["reg_store_id"] = store_id
-        # If store already has a manager, user can only join as employee
-        has_manager = get_store_manager(store_id) is not None
+        # Manager option is only shown if the store has no non-owner manager yet
+        can_be_manager = not store_has_non_owner_manager(store_id)
         role_rows = []
-        if not has_manager:
+        if can_be_manager:
             role_rows.append([InlineKeyboardButton("👑 مدیر", callback_data="user_join_role:manager")])
         role_rows.append([InlineKeyboardButton("🧑‍🔧 کارمند", callback_data="user_join_role:employee")])
         role_rows.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")])
         msg = f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:"
-        if has_manager:
+        if not can_be_manager:
             msg += "\n\nℹ️ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید."
         await query.edit_message_text(
             msg,
@@ -1378,17 +1424,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if get_user_role_in_store(uid, store_id) is not None:
             await query.edit_message_text("ℹ️ شما عضو این فروشگاه هستید.")
             return
-        # Guard: only allow "manager" if no manager exists
-        if role == ROLE_MANAGER and get_store_manager(store_id) is not None:
+        # Guard: only allow "manager" if no non-owner manager exists
+        if role == ROLE_MANAGER and store_has_non_owner_manager(store_id):
             await query.edit_message_text(
                 "⛔ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧑‍🔧 عضویت به عنوان کارمند", callback_data="user_join_role:employee")], [InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")]]),
             )
             return
-        # If user picked "manager" and store already has a manager, demote old manager
+        # If user picked "manager" and store already has a non-owner manager, demote old manager
         if role == ROLE_MANAGER:
             old = get_store_manager(store_id)
-            if old and int(old["telegram_id"]) != uid:
+            if old and int(old["telegram_id"]) != uid and int(old["telegram_id"]) != OWNER_ID:
                 db_exec(
                     "UPDATE store_members SET role = ? WHERE store_id = ? AND user_id = ?",
                     (ROLE_EMPLOYEE, store_id, int(old["telegram_id"])),
@@ -1406,6 +1452,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         db_exec("UPDATE stores SET owner_id = ?, updated_at = ? WHERE id = ?", (uid, now_tehran(), store_id))
         log_action(uid, "joined_store_via_browse", f"store_id={store_id}, role={role}")
+        # Notify owner + current manager(s) about the new membership
+        await notify_membership_change(context, store_id, uid, role)
         set_state(context, None)
         clear_temp(context)
         role_label = "مدیر" if role == ROLE_MANAGER else "کارمند"
@@ -1437,15 +1485,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("❌ فروشگاه یافت نشد.")
             return
         get_temp(context)["reg_store_id"] = store_id
-        # If store already has a manager, user can only join as employee
-        has_manager = get_store_manager(store_id) is not None
+        # Manager option is only shown if the store has no non-owner manager yet
+        can_be_manager = not store_has_non_owner_manager(store_id)
         role_rows = []
-        if not has_manager:
+        if can_be_manager:
             role_rows.append([InlineKeyboardButton("👑 مدیر", callback_data=f"reg_pick_role:manager")])
         role_rows.append([InlineKeyboardButton("🧑‍🔧 کارمند", callback_data=f"reg_pick_role:employee")])
         role_rows.append([InlineKeyboardButton("❌ لغو", callback_data="cancel_action")])
         msg = f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:"
-        if has_manager:
+        if not can_be_manager:
             msg += "\n\nℹ️ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید."
         await query.edit_message_text(
             msg,
@@ -1463,17 +1511,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not store:
             await query.edit_message_text("❌ فروشگاه یافت نشد.")
             return
-        # Guard: only allow "manager" if no manager exists
-        if role == ROLE_MANAGER and get_store_manager(store_id) is not None:
+        # Guard: only allow "manager" if no non-owner manager exists
+        if role == ROLE_MANAGER and store_has_non_owner_manager(store_id):
             await query.edit_message_text(
                 "⛔ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧑‍🔧 عضویت به عنوان کارمند", callback_data="reg_pick_role:employee")], [InlineKeyboardButton("⬅️ بازگشت", callback_data="cancel_action")]]),
             )
             return
-        # If user chose "manager" for an existing store, demote the old manager to employee
+        # If user chose "manager" for an existing store, demote the old non-owner manager to employee
         if role == ROLE_MANAGER:
             old = get_store_manager(store_id)
-            if old and int(old["telegram_id"]) != uid:
+            if old and int(old["telegram_id"]) != uid and int(old["telegram_id"]) != OWNER_ID:
                 # Demote old manager
                 db_exec(
                     "UPDATE store_members SET role = ? WHERE store_id = ? AND user_id = ?",
@@ -1494,6 +1542,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Update stores.owner_id for consistency
         db_exec("UPDATE stores SET owner_id = ?, updated_at = ? WHERE id = ?", (uid, now_tehran(), store_id))
         log_action(uid, "joined_store", f"store_id={store_id}, role={role}")
+        # Notify owner + current manager(s) about the new membership
+        await notify_membership_change(context, store_id, uid, role)
         set_state(context, None)
         clear_temp(context)
         role_label = "مدیر" if role == ROLE_MANAGER else "کارمند"
@@ -1616,11 +1666,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not product:
             await query.edit_message_text("❌ محصول یافت نشد.")
             return
-        # Permission: owner, original seller, or manager of the store
+        # Permission: owner, OR any member of the store
+        store_id = int(product["store_id"]) if product["store_id"] else 0
         can_delete = (
             is_owner(uid)
             or int(product["seller_id"]) == uid
-            or user_is_store_manager(uid, int(product["store_id"]) if product["store_id"] else 0)
+            or (store_id and get_user_role_in_store(uid, store_id) is not None)
         )
         if not can_delete:
             await query.edit_message_text("⛔ دسترسی ندارید.")
@@ -1636,10 +1687,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not product:
             await query.edit_message_text("❌ محصول یافت نشد.")
             return
+        store_id = int(product["store_id"]) if product["store_id"] else 0
         can_edit = (
             is_owner(uid)
             or int(product["seller_id"]) == uid
-            or user_is_store_manager(uid, int(product["store_id"]) if product["store_id"] else 0)
+            or (store_id and get_user_role_in_store(uid, store_id) is not None)
         )
         if not can_edit:
             await query.edit_message_text("⛔ دسترسی ندارید.")
@@ -1732,6 +1784,58 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # ---- Admin: stores ----
     if data == "admin_stores":
         await query.edit_message_text("🏪 **مدیریت فروشگاه‌ها**\n\nیکی از گزینه‌ها را انتخاب کنید:", reply_markup=admin_stores_kb(), parse_mode='Markdown')
+        return
+
+    if data == "adm_xfer_confirm":
+        # Final transfer: demote old non-owner manager(s) to employee, set new user as manager
+        temp = get_temp(context)
+        store_id = int(temp.get("xfer_store_id", 0))
+        target_uid = int(temp.get("xfer_target_uid", 0))
+        store = get_store(store_id) if store_id else None
+        target_user = get_user(target_uid) if target_uid else None
+        if not store or not target_user:
+            await query.edit_message_text("❌ فروشگاه یا کاربر یافت نشد.", reply_markup=admin_stores_kb())
+            return
+        # Capture old non-owner managers for notification
+        old_managers = db_all(
+            "SELECT user_id FROM store_members WHERE store_id = ? AND role = 'manager' AND user_id != ?",
+            (store_id, OWNER_ID),
+        )
+        # Demote all current non-owner managers to employees (keep owner as manager)
+        db_exec(
+            "UPDATE store_members SET role = 'employee' WHERE store_id = ? AND role = 'manager' AND user_id != ?",
+            (store_id, OWNER_ID),
+        )
+        # Promote target to manager (insert or replace)
+        db_exec(
+            "INSERT OR REPLACE INTO store_members(store_id, user_id, role, joined_at) VALUES(?, ?, ?, ?)",
+            (store_id, target_uid, ROLE_MANAGER, now_tehran()),
+        )
+        # Update owner_id
+        db_exec("UPDATE stores SET owner_id = ?, updated_at = ? WHERE id = ?", (target_uid, now_tehran(), store_id))
+        # Cancel pending_buys
+        db_exec("DELETE FROM pending_buys WHERE store_id = ?", (store_id,))
+        log_action(uid, "admin_transfer_store", f"store_id={store_id}, target={target_uid}, name={store['name']}")
+        # Notify owner + new manager
+        await notify_membership_change(context, store_id, target_uid, ROLE_MANAGER)
+        # Notify old non-owner managers about demotion
+        for om in old_managers:
+            om_uid = int(om["user_id"])
+            if om_uid == target_uid:
+                continue
+            try:
+                await context.bot.send_message(
+                    chat_id=om_uid,
+                    text=f"ℹ️ شما از مدیریت فروشگاه «{store['name']}» به کارمند تنزل یافتید (انتقال توسط ادمین).",
+                )
+            except Exception:
+                pass
+        set_state(context, None)
+        await query.edit_message_text(
+            f"✅ فروشگاه **{store['name']}** به {target_user['name']} منتقل شد.",
+            reply_markup=admin_stores_kb(),
+            parse_mode='Markdown',
+        )
         return
 
     if data == "admin_store_create":
@@ -2241,6 +2345,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 (new_id, uid, ROLE_MANAGER, now),
             )
             log_action(uid, "created_store", f"store_id={new_id}, name={name}")
+            # Notify owner about the new store creation (and that user is now its manager)
+            await notify_membership_change(context, new_id, uid, ROLE_MANAGER)
             set_state(context, None)
             await update.message.reply_text(
                 f"✅ فروشگاه «{name}» ساخته شد و شما مدیر آن هستید.",
@@ -2352,6 +2458,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 (new_id, uid, ROLE_MANAGER, now),
             )
             log_action(uid, "admin_create_store", f"store_id={new_id}, name={name}")
+            # Notify owner about the new store (admin is owner, so this is a no-op for owner, but safe to call)
+            await notify_membership_change(context, new_id, uid, ROLE_MANAGER)
             set_state(context, None)
             await update.message.reply_text(
                 f"✅ فروشگاه «{name}» ساخته شد. شما مدیر آن هستید.",
