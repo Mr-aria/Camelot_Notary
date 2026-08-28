@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*- coding: utf8 -*-
 """Camelot Telegram Marketplace Bot - v2: Stores & Roles"""
 
 from __future__ import annotations
