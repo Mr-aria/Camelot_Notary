@@ -1349,13 +1349,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("ℹ️ شما عضو این فروشگاه هستید.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")]]))
             return
         get_temp(context)["reg_store_id"] = store_id
+        # If store already has a manager, user can only join as employee
+        has_manager = get_store_manager(store_id) is not None
+        role_rows = []
+        if not has_manager:
+            role_rows.append([InlineKeyboardButton("👑 مدیر", callback_data="user_join_role:manager")])
+        role_rows.append([InlineKeyboardButton("🧑‍🔧 کارمند", callback_data="user_join_role:employee")])
+        role_rows.append([InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")])
+        msg = f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:"
+        if has_manager:
+            msg += "\n\nℹ️ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید."
         await query.edit_message_text(
-            f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("👑 مدیر", callback_data="user_join_role:manager")],
-                [InlineKeyboardButton("🧑‍🔧 کارمند", callback_data="user_join_role:employee")],
-                [InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")],
-            ]),
+            msg,
+            reply_markup=InlineKeyboardMarkup(role_rows),
             parse_mode='Markdown',
         )
         return
@@ -1371,6 +1377,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         if get_user_role_in_store(uid, store_id) is not None:
             await query.edit_message_text("ℹ️ شما عضو این فروشگاه هستید.")
+            return
+        # Guard: only allow "manager" if no manager exists
+        if role == ROLE_MANAGER and get_store_manager(store_id) is not None:
+            await query.edit_message_text(
+                "⛔ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧑‍🔧 عضویت به عنوان کارمند", callback_data="user_join_role:employee")], [InlineKeyboardButton("⬅️ بازگشت", callback_data="my_stores_back")]]),
+            )
             return
         # If user picked "manager" and store already has a manager, demote old manager
         if role == ROLE_MANAGER:
@@ -1424,10 +1437,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("❌ فروشگاه یافت نشد.")
             return
         get_temp(context)["reg_store_id"] = store_id
-        set_state(context, S_REG_CHOOSE_ROLE)
+        # If store already has a manager, user can only join as employee
+        has_manager = get_store_manager(store_id) is not None
+        role_rows = []
+        if not has_manager:
+            role_rows.append([InlineKeyboardButton("👑 مدیر", callback_data=f"reg_pick_role:manager")])
+        role_rows.append([InlineKeyboardButton("🧑‍🔧 کارمند", callback_data=f"reg_pick_role:employee")])
+        role_rows.append([InlineKeyboardButton("❌ لغو", callback_data="cancel_action")])
+        msg = f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:"
+        if has_manager:
+            msg += "\n\nℹ️ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید."
         await query.edit_message_text(
-            f"🏪 فروشگاه: **{store['name']}**\n\nنقش خود را انتخاب کنید:",
-            reply_markup=store_role_kb("reg_pick_role"),
+            msg,
+            reply_markup=InlineKeyboardMarkup(role_rows),
             parse_mode='Markdown',
         )
         return
@@ -1440,6 +1462,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         store = get_store(store_id)
         if not store:
             await query.edit_message_text("❌ فروشگاه یافت نشد.")
+            return
+        # Guard: only allow "manager" if no manager exists
+        if role == ROLE_MANAGER and get_store_manager(store_id) is not None:
+            await query.edit_message_text(
+                "⛔ این فروشگاه در حال حاضر مدیر دارد. شما فقط می‌توانید به عنوان کارمند بپیوندید.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🧑‍🔧 عضویت به عنوان کارمند", callback_data="reg_pick_role:employee")], [InlineKeyboardButton("⬅️ بازگشت", callback_data="cancel_action")]]),
+            )
             return
         # If user chose "manager" for an existing store, demote the old manager to employee
         if role == ROLE_MANAGER:
