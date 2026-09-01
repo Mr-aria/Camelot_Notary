@@ -1,4 +1,4 @@
-# -*- coding: utf8 -*-
+# -*- coding: utf-8 -*-
 """Camelot Telegram Marketplace Bot - v2: Stores & Roles"""
 
 from __future__ import annotations
@@ -448,6 +448,26 @@ def get_store_manager(store_id: int) -> Optional[sqlite3.Row]:
         (store_id,),
     )
 
+def get_store_payment_manager(store_id: int) -> Optional[sqlite3.Row]:
+    """Returns the manager whose bank_account should be shown to buyers.
+    Priority: a non-owner manager (the actual shop operator) over the bot owner.
+    Returns None if the store has no manager at all."""
+    # First, try non-owner manager
+    row = db_one(
+        """
+        SELECT u.* FROM users u
+        JOIN store_members m ON m.user_id = u.telegram_id
+        WHERE m.store_id = ? AND m.role = 'manager' AND m.user_id != ?
+        ORDER BY m.joined_at ASC
+        LIMIT 1
+        """,
+        (store_id, OWNER_ID),
+    )
+    if row:
+        return row
+    # Fallback: any manager (could be the bot owner)
+    return get_store_manager(store_id)
+
 def get_store_employees(store_id: int) -> List[sqlite3.Row]:
     return db_all(
         """
@@ -467,8 +487,10 @@ def store_has_non_owner_manager(store_id: int) -> bool:
     return len(rows) > 0
 
 def get_store_active_account(store_id: int) -> str:
-    """Account that should receive payments for this store. Always the manager's account."""
-    mgr = get_store_manager(store_id)
+    """Account that should receive payments for this store.
+    Priority: a non-owner manager's account (the actual shop operator).
+    Falls back to the bot owner's account if no other manager exists."""
+    mgr = get_store_payment_manager(store_id)
     if not mgr:
         return ""
     return (mgr["bank_account"] or "").strip()
@@ -992,7 +1014,7 @@ async def verify_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE, mes
 
     product = db_one("SELECT * FROM products WHERE code = ?", (pending["product_code"],))
     seller = get_user(int(pending["seller_id"]))  # the employee who listed it
-    manager = get_store_manager(int(store_id))     # the manager who gets paid
+    manager = get_store_payment_manager(int(store_id))  # the manager who gets paid (priority: non-owner)
     buyer = get_user(uid)
     purchased_at = now_tehran()
 
@@ -1609,7 +1631,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text("❌ فروشگاه این محصول حذف شده است.")
             return
 
-        manager = get_store_manager(store_id)
+        manager = get_store_payment_manager(store_id)
         if not manager:
             await query.edit_message_text("❌ این فروشگاه در حال حاضر مدیر ندارد و امکان خرید وجود ندارد.")
             return
@@ -1635,7 +1657,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"۱. به  بانک (@{BANK_BOT_USERNAME}) بروید.\n"
             f"۲. مبلغ {fmt_money(int(product['price']))} تومان را به شماره حساب زیر واریز کنید:\n"
             f"<code>{seller_account}</code>\n"
-            f"(این حساب متعلق به مدیر فروشگاه «{store['name']}» است)\n\n"
+            f"(این حساب متعلق به مدیر فروشگاه «{store['name']}» — آقا/خانم {manager['name']} — است)\n\n"
             f"⚠️ <b>حتماً حتماً</b> در بخش توضیحات انتقال وجه، کد ۱۲ کاراکتری زیر را وارد کنید:\n"
             f"<code>{tx_code}</code>\n\n"
             f"اگر این کد را در بخش توضیحات وارد نکنید، پول شما گم می‌شود و قابل پیگیری نخواهد بود.\n\n"
